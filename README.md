@@ -6114,3 +6114,40 @@ To help plan the next steps, let me know:
 * Do you want to try setting up Transformers.js for completely free browser-side AI transcription, or start with manual text syncing first?
 
 
+Short answer: it's usable, but it's the wrong prompt for this app, and a few of its instructions will actively hurt you here.
+
+**Where it misfires**
+
+It's written for *reconstructing an existing repository* — "the repository is evidence," "codebase archaeologist," "audit the migrations." You have no repo. About 40% of it is dead weight from the first token.
+
+It mandates a Cloudflare Workers + D1 + R2 backend. Your app's entire advantage is that it needs none of that. Push audio into R2 and you inherit egress costs, storage costs, and — the real problem — you become a host of user-uploaded copyrighted music, which means DMCA agent registration, takedown processing, and liability you currently don't have. The free tier dies the moment the app gets popular. A prompt that forces a backend onto a client-side app will get you one.
+
+"Make sure all paths are happy paths" is the most damaging line in it. The hard part of this app is exactly the unhappy paths: the 250 MB model download that fails at 80%, Safari without WebCodecs, the 4K export that OOMs on mobile, alignment that returns garbage on a heavily produced track. Instruct an agent to only build happy paths and you'll get a polished demo that breaks on the second real song.
+
+The cinematic/immersive directive is right for your landing page and wrong for your editor. A timeline editor needs density, sub-16ms scrub response, and visual restraint. Parallax and scroll-pinning in a waveform editor is a bug. The prompt doesn't distinguish the two surfaces, so it will animate the wrong one.
+
+And 130 sections of adjectives dilutes attention. Agents follow concrete constraints and acceptance criteria far better than "make it breathtaking."
+
+**What works** — the evidence hierarchy, no-fake-completion rule, adversarial self-test, and second/third-order analysis are all genuinely good. I kept those.
+
+I've written a replacement tuned to this specific app:The main differences worth noting:
+
+**It forbids the backend rather than mandating one.** The original prompt's Cloudflare stack would push you into hosting user audio, which turns a free app into a bandwidth bill and a DMCA obligation. The replacement allows exactly one Worker, for model file delivery and anonymous counts, and only in Phase 5.
+
+**Two design languages instead of one.** The landing page gets the full cinematic treatment you asked for. The editor gets restraint, density, and sub-16ms scrub latency. Applying "immersive and motion-driven" to a timeline editor produces a tool nobody can work in for two hours.
+
+**Unhappy paths are a required section, not a banned one.** Eleven specific failure modes, each needing designed behavior, with manual tap-sync as the guaranteed floor beneath all of them.
+
+**Verification gates between phases.** Each phase has a concrete pass condition — a click-track sync test, a measured timing-error number, a crash-recovery test — so the agent can't build five phases of unverified code and declare victory.
+
+One thing to set expectations on: no prompt reliably produces this whole app in one pass. It's genuinely large — WebCodecs muxing, ONNX inference, and a timeline editor are each a substantial project. Run it phase by phase, and treat Phase 1's gate as a real release. A working tap-sync app that exports clean MP4s is more useful than a half-built ML pipeline.
+
+I'll lay this out as a full build spec you can keep and work through.The spec is published above. Three things in it are worth flagging now, because they change decisions you'd otherwise make first:
+
+**Don't build ASR-first.** Whisper on a full music mix misses words badly — reverb, backing vocals, melisma. The real problem is timing, not transcription. Have the user paste lyrics they already have and solve alignment only. ASR becomes a fallback mode, not the backbone.
+
+**Ship manual tap-sync before any ML.** The user plays the track and taps a key at each line. It takes a day, never fails, works on every browser and every language, and it's your permanent escape hatch when a model chokes. That plus WebCodecs export is already a shippable product.
+
+**Lyrics are copyrighted independently of the recording.** You can't pull from Genius/Musixmatch — that's licensed data. Lyrics must come from the user. Since everything runs locally, "your audio never leaves your device" is both literally true and your best marketing line.
+
+On the frontend-heavy goal: it's fully viable. Whisper and the alignment models run via `transformers.js`/`onnxruntime-web` on WebGPU, and WebCodecs gives you hardware-accelerated MP4 export. The one hosting constraint to plan around from day one is COOP/COEP headers, since `SharedArrayBuffer` is needed for threaded WASM and `ffmpeg.wasm`.
