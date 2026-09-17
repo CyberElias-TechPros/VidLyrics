@@ -1,0 +1,143 @@
+/* ------------------------------------------------------------------ *
+ * Design tokens.
+ *
+ * Two surfaces share these tokens but use them differently: the marketing
+ * surface spends them on atmosphere, the editor spends them on precision.
+ *
+ * No webfonts are loaded. The page is served with
+ * Cross-Origin-Embedder-Policy: require-corp, so every cross-origin asset must
+ * carry CORP headers; a font CDN that does not would silently disable
+ * cross-origin isolation and break threaded WASM. System stacks are always
+ * resident, which also removes the "frame 0 rendered in a fallback font" bug.
+ * ------------------------------------------------------------------ */
+
+:root {
+  /* Colour */
+  --ink-900: #05060a;
+  --ink-800: #090b11;
+  --ink-700: #0d1017;
+  --ink-600: #12161f;
+  --ink-500: #1a1f2b;
+  --ink-400: #242b3a;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  --text: #eceef4;
+  --text-dim: #a7adbf;
+  --text-faint: #6d7488;
+
+  --amber: #ffb454;
+  --amber-soft: rgba(255, 180, 84, 0.14);
+  --violet: #8b7cff;
+  --violet-soft: rgba(139, 124, 255, 0.14);
+  --signal: #3ddc97;
+  --danger: #ff6070;
+  --warning: #ffcf5c;
+
+  /* Editor semantic colours — confidence heat is information, not decoration. */
+  --conf-high: #3ddc97;
+  --conf-mid: #ffcf5c;
+  --conf-low: #ff6070;
+  --selection: rgba(255, 180, 84, 0.22);
+  --playhead: #ff6b81;
+
+  /* Type */
+  --font-display: "Space Grotesk", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Mono", ui-monospace,
+    "DejaVu Sans Mono", Menlo, Consolas, monospace;
+
+  /* Fluid type scale — clamp keeps one rule working from 320px to 2560px. */
+  --step--1: clamp(0.72rem, 0.7rem + 0.1vw, 0.8rem);
+  --step-0: clamp(0.9rem, 0.86rem + 0.2vw, 1rem);
+  --step-1: clamp(1.05rem, 0.98rem + 0.35vw, 1.25rem);
+  --step-2: clamp(1.3rem, 1.15rem + 0.7vw, 1.75rem);
+  --step-3: clamp(1.7rem, 1.4rem + 1.4vw, 2.6rem);
+  --step-4: clamp(2.2rem, 1.6rem + 2.8vw, 4rem);
+  --step-5: clamp(2.8rem, 1.8rem + 5.2vw, 7rem);
+  --step-6: clamp(3.4rem, 1.6rem + 8vw, 10rem);
+
+  /* Space — a 4px base so the editor can stay dense and the marketing surface
+     can still breathe by using multiples. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+  --sp-9: 96px;
+  --sp-10: 128px;
+
+  /* Radius — deliberately small. Large radii read as "template". */
+  --r-1: 3px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 16px;
+  --r-pill: 999px;
+
+  /* Elevation — shadows are used sparingly; the editor uses borders instead. */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --sh-3: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --glow-amber: 0 0 24px rgba(255, 180, 84, 0.35);
+
+  /* Motion — the editor's transitions are 120-180ms and only ever on state
+     change. Nothing on the marketing surface uses these durations. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 120ms;
+  --dur-base: 170ms;
+  --dur-slow: 320ms;
+
+  /* Editor metrics */
+  --rail-w: 56px;
+  --panel-w: 340px;
+  --timeline-h: 220px;
+  --transport-h: 56px;
+
+  color-scheme: dark;
+}
+
+/* Light theme — supported, because not everyone edits in a dark room. */
+:root[data-theme='light'] {
+  --ink-900: #f6f6f8;
+  --ink-800: #ffffff;
+  --ink-700: #fbfbfd;
+  --ink-600: #f1f2f6;
+  --ink-500: #e6e8ee;
+  --ink-400: #d6d9e2;
+  --line: rgba(10, 12, 20, 0.1);
+  --line-strong: rgba(10, 12, 20, 0.2);
+  --text: #10131b;
+  --text-dim: #4a5163;
+  --text-faint: #767d90;
+  --sh-1: 0 1px 2px rgba(16, 19, 27, 0.08);
+  --sh-2: 0 4px 16px rgba(16, 19, 27, 0.1);
+  --sh-3: 0 18px 48px rgba(16, 19, 27, 0.14);
+  --conf-low: #d1374a;
+  color-scheme: light;
+}
+
+/* Motion preferences. Honoured globally so no component can opt out by
+   accident: the landing page degrades to fades, the editor keeps its
+   120ms state feedback because that is functional, not decorative. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur-base: 1ms;
+    --dur-slow: 1ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

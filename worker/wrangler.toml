@@ -1,0 +1,23 @@
+name = "vidlyrics-edge"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Deliberately no bindings.
+#
+# No D1, no R2, no KV, no Durable Objects, no Queues. Every one of those would
+# exist to hold user data, and holding user audio would make this a host of
+# unlicensed music with DMCA obligations attached. The product's core claim is
+# that audio never leaves the device, and any binding that stores media would
+# quietly falsify it.
+#
+# The two optional vars below are plain strings: an upstream origin to proxy
+# model files from, and an analytics destination for validated counters. Neither
+# is required, and the worker answers correctly with neither set.
+
+[vars]
+VERSION = "0.1.0"
+# MODEL_ORIGIN = "https://models.example.com"
+# METRICS_SINK = "https://analytics.example.com/ingest"
+
+[observability]
+enabled = true
