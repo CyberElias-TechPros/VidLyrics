@@ -1,0 +1,458 @@
+/* ------------------------------------------------------------------ *
+ * MARKETING SURFACE
+ *
+ * The composition is derived from what this product is: audio, a waveform, a
+ * timeline, and type appearing in time. Not hero → three cards → testimonials.
+ *
+ * Every effect here is a transform or opacity change. Layout-affecting
+ * animation would cause CLS on the page that carries our LCP.
+ * ------------------------------------------------------------------ */
+
+.mkt {
+  position: relative;
+  isolation: isolate;
+}
+
+/* ---------- shared chrome ---------- */
+
+.mkt-nav {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  padding: var(--sp-4) clamp(var(--sp-4), 4vw, var(--sp-8));
+  transition: background var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out);
+  border-bottom: 1px solid transparent;
+}
+.mkt-nav[data-scrolled='true'] {
+  background: color-mix(in srgb, var(--ink-900) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  border-bottom-color: var(--line);
+}
+.mkt-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-size: var(--step-1);
+  text-decoration: none;
+}
+.mkt-brand svg { flex: none; }
+.mkt-nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mkt-nav-links a {
+  text-decoration: none;
+  color: var(--text-dim);
+  font-size: var(--step--1);
+  letter-spacing: 0.02em;
+  position: relative;
+  padding-block: var(--sp-1);
+  transition: color var(--dur-base) var(--ease-out);
+}
+.mkt-nav-links a::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: 0;
+  height: 1px;
+  background: var(--amber);
+  transition: right var(--dur-slow) var(--ease-out);
+}
+.mkt-nav-links a:hover { color: var(--text); }
+.mkt-nav-links a:hover::after { right: 0; }
+@media (max-width: 780px) {
+  .mkt-nav-links { display: none; }
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  --btn-bg: var(--ink-500);
+  --btn-fg: var(--text);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: 11px 20px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-decoration: none;
+  overflow: hidden;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0) scale(0.985); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-primary {
+  --btn-bg: var(--amber);
+  --btn-fg: #14100a;
+  box-shadow: var(--glow-amber);
+}
+.btn-primary:hover { box-shadow: 0 0 34px rgba(255, 180, 84, 0.55); }
+.btn-ghost {
+  --btn-bg: transparent;
+  border-color: var(--line-strong);
+}
+.btn-ghost:hover { border-color: var(--amber); color: var(--amber); }
+.btn-sm { padding: 7px 12px; font-size: 0.78rem; }
+.btn-lg { padding: 15px 28px; font-size: var(--step-0); }
+
+/* ---------- hero ---------- */
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: center;
+  padding: calc(var(--sp-10) + 40px) clamp(var(--sp-4), 5vw, var(--sp-9)) var(--sp-8);
+  overflow: hidden;
+}
+
+/* The waveform canvas is the hero's identity, sitting behind the type. */
+.hero-wave {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  width: 100%;
+  height: 100%;
+  opacity: 0.9;
+}
+.hero-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 50% 0%, transparent 20%, var(--ink-900) 78%),
+    linear-gradient(to bottom, transparent 55%, var(--ink-900) 96%);
+}
+/* A single slow grain/atmosphere layer. One animated element, not twelve. */
+.hero-glow {
+  position: absolute;
+  z-index: -3;
+  width: 60vw;
+  height: 60vw;
+  max-width: 900px;
+  max-height: 900px;
+  left: 50%;
+  top: 34%;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 180, 84, 0.16), rgba(139, 124, 255, 0.09) 45%, transparent 70%);
+  filter: blur(20px);
+  animation: breathe 14s var(--ease-in-out) infinite;
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: var(--sp-5);
+}
+.hero-eyebrow::before {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--amber);
+}
+
+/* Kinetic display type. The word "time" is the product's subject, so it is the
+   one word that animates — everything else is set solidly and reads instantly. */
+.hero-title {
+  font-size: var(--step-6);
+  line-height: 0.88;
+  letter-spacing: -0.05em;
+  font-weight: 700;
+  max-width: 16ch;
+  margin: 0 0 var(--sp-5);
+}
+.hero-title .ln { display: block; overflow: hidden; }
+.hero-title .ln > span {
+  display: block;
+  animation: lineUp 900ms var(--ease-out) both;
+}
+.hero-title .ln:nth-child(2) > span { animation-delay: 90ms; }
+.hero-title .ln:nth-child(3) > span { animation-delay: 180ms; }
+@keyframes lineUp {
+  from { transform: translateY(105%); }
+  to { transform: translateY(0); }
+}
+.hero-title em {
+  font-style: normal;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--text-dim);
+  position: relative;
+}
+.hero-title .accent {
+  color: var(--amber);
+  position: relative;
+  display: inline-block;
+}
+
+.hero-sub {
+  font-size: var(--step-1);
+  color: var(--text-dim);
+  max-width: 46ch;
+  line-height: 1.55;
+  margin-bottom: var(--sp-6);
+}
+.hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.hero-proof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--line);
+  font-size: var(--step--1);
+  color: var(--text-faint);
+}
+.hero-proof span { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.hero-proof strong { color: var(--text-dim); font-weight: 600; }
+
+/* Live lyric line: the signature moment. A line types itself in karaoke fill,
+   exactly as the product renders it, then resets. Pure transform/opacity. */
+.hero-demo {
+  margin-top: var(--sp-8);
+  padding: var(--sp-5) 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.hero-demo-time {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.hero-demo-line {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.28em;
+}
+.hero-demo-line b {
+  font-weight: inherit;
+  color: var(--text-faint);
+  transition: color 140ms linear;
+}
+.hero-demo-line b[data-on='true'] { color: var(--text); }
+
+/* ---------- sections ---------- */
+
+.section {
+  padding: clamp(var(--sp-8), 10vw, var(--sp-10)) clamp(var(--sp-4), 5vw, var(--sp-9));
+  position: relative;
+}
+.section-head {
+  max-width: 62ch;
+  margin-bottom: var(--sp-7);
+}
+.section-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: block;
+  margin-bottom: var(--sp-4);
+}
+.section-title { font-size: var(--step-4); margin-bottom: var(--sp-4); }
+.section-lede { font-size: var(--step-1); color: var(--text-dim); }
+
+/* Pipeline: the product's actual process, laid out as a timeline because a
+   timeline is what the product edits. */
+.pipeline {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+.pipeline-step {
+  display: grid;
+  grid-template-columns: minmax(88px, 140px) 1fr;
+  gap: var(--sp-5);
+  padding: var(--sp-5) 0;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+  transition: background var(--dur-base) var(--ease-out);
+}
+.pipeline-step:hover { background: rgba(255, 255, 255, 0.02); }
+.pipeline-step dt {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--amber);
+  letter-spacing: 0.12em;
+}
+.pipeline-step dd { margin: 0; }
+.pipeline-step h3 { font-size: var(--step-2); margin-bottom: var(--sp-2); }
+.pipeline-step p { color: var(--text-dim); max-width: 60ch; }
+@media (max-width: 640px) {
+  .pipeline-step { grid-template-columns: 1fr; gap: var(--sp-2); }
+}
+
+/* Privacy claim — the strongest differentiator, given a full-width treatment
+   rather than being buried as a feature bullet. */
+.privacy {
+  border-block: 1px solid var(--line);
+  background:
+    radial-gradient(80% 120% at 20% 0%, rgba(61, 220, 151, 0.08), transparent 60%),
+    var(--ink-800);
+}
+.privacy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--sp-5);
+  margin-top: var(--sp-6);
+}
+.privacy-card {
+  padding: var(--sp-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  background: color-mix(in srgb, var(--ink-900) 60%, transparent);
+  transition: transform var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out);
+}
+.privacy-card:hover { transform: translateY(-3px); border-color: var(--line-strong); }
+.privacy-card h3 { font-size: var(--step-1); margin-bottom: var(--sp-2); }
+.privacy-card p { color: var(--text-dim); font-size: var(--step--1); }
+.tick { color: var(--signal); }
+.cross { color: var(--danger); }
+
+/* Comparison table */
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--step--1);
+  margin-top: var(--sp-6);
+}
+.compare th, .compare td {
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.compare thead th {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border-bottom-color: var(--line-strong);
+}
+.compare tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+.compare td:first-child { color: var(--text); font-weight: 600; }
+
+/* FAQ */
+.faq { border-top: 1px solid var(--line); }
+.faq-item { border-bottom: 1px solid var(--line); }
+.faq-item summary {
+  cursor: pointer;
+  padding: var(--sp-5) 0;
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-4);
+  transition: color var(--dur-base) var(--ease-out);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary:hover { color: var(--amber); }
+.faq-item summary::after {
+  content: '+';
+  font-family: var(--font-mono);
+  font-size: var(--step-1);
+  color: var(--text-faint);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.faq-item[open] summary::after { transform: rotate(45deg); }
+.faq-item .faq-body {
+  padding: 0 0 var(--sp-5);
+  color: var(--text-dim);
+  max-width: 68ch;
+}
+
+/* Final CTA */
+.final {
+  text-align: center;
+  padding-block: clamp(var(--sp-9), 12vw, var(--sp-10));
+  background:
+    radial-gradient(60% 90% at 50% 100%, rgba(255, 180, 84, 0.12), transparent 70%),
+    var(--ink-900);
+}
+.final h2 { font-size: var(--step-5); margin-bottom: var(--sp-5); }
+
+/* Footer */
+.mkt-footer {
+  border-top: 1px solid var(--line);
+  padding: var(--sp-7) clamp(var(--sp-4), 5vw, var(--sp-9)) var(--sp-6);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: var(--sp-6);
+  font-size: var(--step--1);
+}
+.mkt-footer h4 {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: var(--sp-3);
+}
+.mkt-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.mkt-footer a { color: var(--text-dim); text-decoration: none; transition: color var(--dur-base) var(--ease-out); }
+.mkt-footer a:hover { color: var(--amber); }
+.mkt-footer-bottom {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  padding-top: var(--sp-5);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  justify-content: space-between;
+  color: var(--text-faint);
+}

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+
+    <title>Lyrics Video Studio — synced lyric videos, entirely in your browser</title>
+    <meta
+      name="description"
+      content="Turn an audio file and your lyrics into a professionally timed lyric video. Timing, karaoke highlighting and MP4 export all run on your device — your audio never leaves it."
+    />
+    <link rel="canonical" href="https://vidlyrics.app/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Lyrics Video Studio" />
+    <meta property="og:title" content="Lyrics Video Studio — synced lyric videos, entirely in your browser" />
+    <meta
+      property="og:description"
+      content="Import audio, paste your lyrics, tap-sync or auto-align, then export MP4 and subtitles. Everything runs locally. No upload, no account, no per-video cost."
+    />
+    <meta property="og:url" content="https://vidlyrics.app/" />
+    <meta property="og:image" content="/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Lyrics Video Studio" />
+    <meta
+      name="twitter:description"
+      content="Synced lyric videos and karaoke exports, rendered in your browser. Your audio never leaves your device."
+    />
+    <meta name="twitter:image" content="/og.png" />
+
+    <meta name="theme-color" content="#05060a" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!--
+      COOP/COEP are load-bearing but CANNOT be set from a <meta> tag — browsers
+      only honour them as HTTP response headers. They are sent from
+      `public/_headers` (Cloudflare Pages) and from `vite.config.ts`
+      (`server.headers` / `preview.headers`) so dev, preview and production all
+      produce a cross-origin-isolated document, which SharedArrayBuffer
+      (threaded WASM) and several WebCodecs paths require.
+    -->
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://vidlyrics.app/#website",
+            "url": "https://vidlyrics.app/",
+            "name": "Lyrics Video Studio",
+            "inLanguage": "en"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://vidlyrics.app/#app",
+            "name": "Lyrics Video Studio",
+            "url": "https://vidlyrics.app/",
+            "applicationCategory": "MultimediaApplication",
+            "operatingSystem": "Any modern browser (Chrome, Edge, Opera, Safari, Firefox)",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "featureList": [
+              "Manual tap-to-sync lyric timing",
+              "Karaoke word highlighting",
+              "MP4 export via WebCodecs",
+              "LRC, SRT, VTT and ASS subtitle export",
+              "9:16, 1:1, 4:5 and 16:9 aspect presets",
+              "Fully client-side audio processing"
+            ]
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

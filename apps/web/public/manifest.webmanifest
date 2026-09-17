@@ -1,0 +1,17 @@
+{
+  "name": "Lyrics Video Studio",
+  "short_name": "VidLyrics",
+  "description": "Turn an audio file and your lyrics into a synced lyric video, entirely in your browser.",
+  "id": "/",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05060a",
+  "theme_color": "#05060a",
+  "categories": ["music", "video", "creativity", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
