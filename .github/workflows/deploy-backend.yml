@@ -43,6 +43,7 @@ jobs:
       - run: npm ci --no-fund --no-audit
         working-directory: .
       - run: npm run typecheck --workspace worker
+        working-directory: .
       - name: Deploy Worker
         run: npx wrangler deploy
       - name: Verify health
