@@ -49,9 +49,9 @@ interface Definition {
 
 const CATALOGUE: Record<ErrorCode, Definition> = {
   AUDIO_UNSUPPORTED_FORMAT: {
-    title: 'That audio format is not supported here',
+    title: 'No compatible local decoder found',
     detail:
-      'Your browser decodes audio locally, and this file uses a codec it cannot read. MP3, WAV, FLAC, M4A/AAC and OGG work in every modern browser.',
+      'This release could not identify or decode the file. Browser support varies by codec; the app also includes local decoders for MP3, AAC, FLAC, Ogg Vorbis/Opus, WAV, AIFF, CAF, AMR, GSM, WMA, APE, WavPack, Musepack, TTA, DSD, QOA, AC-3/E-AC-3, tracker modules, and AAC or common 16/24-bit mono/stereo ALAC tracks in MP4-family containers. Try re-exporting as PCM WAV or MP3 if this file still fails.',
     recovery: ['try-different-file', 'documentation'],
     retryable: false,
     fatal: false
@@ -59,7 +59,7 @@ const CATALOGUE: Record<ErrorCode, Definition> = {
   AUDIO_DECODE_FAILED: {
     title: 'The file could not be decoded',
     detail:
-      'The file may be truncated, corrupted, or protected. Try re-exporting it from your music software as WAV or MP3 and importing that.',
+      'The file may be truncated, corrupted, encrypted, or use a damaged stream. VidLyrics tries the browser decoder and bundled local codec decoders; if both fail, re-export the track as uncompressed PCM WAV and import it again.',
     recovery: ['try-different-file', 'documentation'],
     retryable: true,
     fatal: false

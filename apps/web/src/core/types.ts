@@ -219,6 +219,24 @@ export interface AssetRecord {
   createdAt: number;
 }
 
+/** Local, generated voiceover audio and its reproducible mix settings. */
+export interface VoiceoverMeta {
+  assetId: Id;
+  fileName: string;
+  mimeType: string;
+  bytes: number;
+  contentHash: string;
+  sampleRate: number;
+  durationUs: Microseconds;
+  voiceId: string;
+  /** Signature of lyric order, text and starts used to synthesize this track. */
+  sourceSignature: string;
+  enabled: boolean;
+  musicGain: number;
+  speechGain: number;
+  createdAt: number;
+}
+
 /* ------------------------------------------------------------------ *
  * EXPORT
  * ------------------------------------------------------------------ */
@@ -269,6 +287,7 @@ export interface Project {
     notes: string;
   };
   audio: AudioMeta | null;
+  voiceover: VoiceoverMeta | null;
   lyrics: LyricsState;
   sections: Section[];
   design: Design;

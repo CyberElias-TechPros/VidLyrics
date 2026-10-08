@@ -145,6 +145,22 @@ const audioSchema = z.object({
   contentHash: z.string().max(128)
 });
 
+const voiceoverSchema = z.object({
+  assetId: z.string().min(1).max(128),
+  fileName: z.string().max(512),
+  mimeType: z.string().max(128),
+  bytes: z.number().int().nonnegative(),
+  contentHash: z.string().max(128),
+  sampleRate: z.number().int().positive(),
+  durationUs: microseconds,
+  voiceId: z.string().min(1).max(128),
+  sourceSignature: z.string().min(1).max(128),
+  enabled: z.boolean(),
+  musicGain: z.number().min(0).max(2),
+  speechGain: z.number().min(0).max(2),
+  createdAt: z.number().finite()
+});
+
 const exportSchema = z.object({
   presetId: z.string().max(64),
   width: z.number().int().min(128).max(7680),
@@ -173,6 +189,7 @@ export const projectSchema = z.object({
     notes: z.string().max(8000)
   }),
   audio: audioSchema.nullable(),
+  voiceover: voiceoverSchema.nullable(),
   lyrics: z.object({
     source: z.enum(['user', 'file', 'asr', 'empty']),
     originalText: z.string().max(200_000),

@@ -57,7 +57,11 @@ export function SupportPage() {
       <p>
         Every feature in this app runs on your hardware, so support depends on what your browser
         exposes. Rather than publish a table that goes stale, this page probes the actual APIs and
-        reports what is available here.
+        reports what is available here. Audio import tries the browser decoder first, then local
+        format-specific decoders for many common and specialist codecs. AAC and common 16/24-bit
+        mono/stereo ALAC tracks in MP4-family containers also have local fallbacks; other container
+        codecs still depend on browser support. Damaged or encrypted files cannot be decoded. Audio
+        is never uploaded for conversion.
       </p>
 
       {!summary ? <p className="ed-hint">Probing browser capabilities…</p> : null}

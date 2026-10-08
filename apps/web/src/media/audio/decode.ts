@@ -2,6 +2,7 @@ import { computePeaks, type PeakData } from '../../core/audio/peaks';
 import { computeSpectrum, type SpectrumEnvelope } from '../../core/audio/spectrum';
 import { usFromSeconds } from '../../core/time';
 import type { ErrorCode } from '../../core/errors';
+import { CompatibilityDecodeError, decodeWithCompatibilityCodec } from './compatDecode';
 
 /**
  * Audio decode + analysis, with a worker fast path and a main-thread fallback.
@@ -29,6 +30,8 @@ export interface DecodeOptions {
   withSpectrum?: boolean;
   onProgress?: (stage: 'decoding' | 'peaks' | 'spectrum', progress: number) => void;
   signal?: AbortSignal;
+  formatHint?: string;
+  mimeType?: string;
 }
 
 export class DecodeError extends Error {
@@ -48,25 +51,47 @@ async function decodeOnMainThread(
   const Ctor: typeof AudioContext | undefined =
     (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
     (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) throw new DecodeError('Web Audio is not available in this browser.', 'AUDIO_UNSUPPORTED_FORMAT');
 
-  const context = new Ctor();
-  let buffer: AudioBuffer;
-  try {
-    buffer = await context.decodeAudioData(file.slice(0));
-  } catch (error) {
-    await context.close().catch(() => undefined);
-    throw new DecodeError(error instanceof Error ? error.message : 'decode failed', 'AUDIO_DECODE_FAILED');
+  let channelData: Float32Array[] | null = null;
+  let sampleRate = 0;
+  let durationSeconds = 0;
+  if (Ctor) {
+    const context = new Ctor();
+    try {
+      const buffer = await context.decodeAudioData(file.slice(0));
+      if (buffer && buffer.length > 0) {
+        sampleRate = buffer.sampleRate;
+        durationSeconds = buffer.duration;
+        channelData = Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel));
+      }
+    } catch {
+      // Continue with the bundled decoder below. Browser codec support differs
+      // by operating system, browser, and the exact codec inside a container.
+    } finally {
+      await context.close().catch(() => undefined);
+    }
   }
-  await context.close().catch(() => undefined);
 
-  if (!buffer || buffer.length === 0) throw new DecodeError('The file decoded to zero samples.', 'AUDIO_EMPTY');
+  if (!channelData) {
+    if (options.signal?.aborted) throw new DecodeError('Decoding was cancelled.', 'CANCELLED');
+    options.onProgress?.('decoding', 0.2);
+    try {
+      const compatible = await decodeWithCompatibilityCodec(file, options.formatHint, options.mimeType);
+      channelData = compatible.channelData;
+      sampleRate = compatible.sampleRate;
+      durationSeconds = Math.min(...channelData.map((channel) => channel.length)) / sampleRate;
+    } catch (error) {
+      if (error instanceof CompatibilityDecodeError) throw new DecodeError(error.message, error.errorCode);
+      throw new DecodeError(error instanceof Error ? error.message : 'Audio decode failed.', 'AUDIO_DECODE_FAILED');
+    }
+  }
 
-  const channels = buffer.numberOfChannels;
-  const length = buffer.length;
-  const channelData: Float32Array[] = [];
-  for (let c = 0; c < channels; c += 1) channelData.push(buffer.getChannelData(c));
-
+  if (options.signal?.aborted) throw new DecodeError('Decoding was cancelled.', 'CANCELLED');
+  if (channelData.length === 0 || channelData.some((channel) => channel.length === 0)) {
+    throw new DecodeError('The file decoded to zero samples.', 'AUDIO_EMPTY');
+  }
+  const channels = channelData.length;
+  const length = Math.min(...channelData.map((channel) => channel.length));
   const interleaved = new Float32Array(length * channels);
   for (let i = 0; i < length; i += 1) {
     for (let c = 0; c < channels; c += 1) interleaved[i * channels + c] = channelData[c]?.[i] ?? 0;
@@ -79,7 +104,7 @@ async function decodeOnMainThread(
   }
 
   options.onProgress?.('peaks', 0);
-  const peaks = await computePeaks(pcm, buffer.sampleRate, 1, {
+  const peaks = await computePeaks(pcm, sampleRate, 1, {
     onProgress: (p) => options.onProgress?.('peaks', p),
     shouldCancel: () => options.signal?.aborted === true
   });
@@ -87,7 +112,7 @@ async function decodeOnMainThread(
   let spectrum: SpectrumEnvelope | null = null;
   if (options.withSpectrum !== false) {
     options.onProgress?.('spectrum', 0);
-    spectrum = await computeSpectrum(pcm, buffer.sampleRate, {
+    spectrum = await computeSpectrum(pcm, sampleRate, {
       onProgress: (p) => options.onProgress?.('spectrum', p),
       shouldCancel: () => options.signal?.aborted === true
     });
@@ -96,9 +121,9 @@ async function decodeOnMainThread(
   return {
     pcm,
     interleaved,
-    sampleRate: buffer.sampleRate,
+    sampleRate,
     channels,
-    durationUs: usFromSeconds(buffer.duration),
+    durationUs: usFromSeconds(durationSeconds || length / sampleRate),
     peaks,
     spectrum
   };
@@ -106,7 +131,7 @@ async function decodeOnMainThread(
 
 type WorkerMessage =
   | { type: 'PROGRESS'; id: number; stage: 'decoding' | 'peaks' | 'spectrum'; progress: number }
-  | { type: 'DECODE_RESULT'; id: number; ok: false; errorCode: string; message: string }
+  | { type: 'DECODE_RESULT'; id: number; ok: false; errorCode: ErrorCode; message: string }
   | {
       type: 'DECODE_RESULT';
       id: number;
@@ -121,13 +146,15 @@ type WorkerMessage =
     };
 
 export async function decodeAudioFile(file: ArrayBuffer, options: DecodeOptions = {}): Promise<DecodeResult> {
+  if (options.signal?.aborted) throw new DecodeError('Decoding was cancelled.', 'CANCELLED');
   try {
     const worker = new Worker(new URL('./decode.worker.ts', import.meta.url), { type: 'module' });
     const result = await new Promise<DecodeResult>((resolve, reject) => {
       const id = Math.floor(Math.random() * 1e9);
       const abort = () => {
-        worker.postMessage({ type: 'CANCEL' });
-        reject(new DecodeError('Decoding was cancelled.', 'AUDIO_DECODE_FAILED'));
+        worker.terminate();
+        options.signal?.removeEventListener('abort', abort);
+        reject(new DecodeError('Decoding was cancelled.', 'CANCELLED'));
       };
       options.signal?.addEventListener('abort', abort, { once: true });
 
@@ -141,7 +168,7 @@ export async function decodeAudioFile(file: ArrayBuffer, options: DecodeOptions 
         worker.terminate();
         options.signal?.removeEventListener('abort', abort);
         if (!message.ok) {
-          reject(new DecodeError(message.message ?? 'decode failed', (message.errorCode as ErrorCode) ?? 'AUDIO_DECODE_FAILED'));
+          reject(new DecodeError(message.message ?? 'decode failed', message.errorCode ?? 'AUDIO_DECODE_FAILED'));
           return;
         }
         const payload = message as unknown as {
@@ -167,6 +194,7 @@ export async function decodeAudioFile(file: ArrayBuffer, options: DecodeOptions 
 
       worker.onerror = () => {
         worker.terminate();
+        options.signal?.removeEventListener('abort', abort);
         reject(new Error('worker failed'));
       };
 
@@ -174,13 +202,22 @@ export async function decodeAudioFile(file: ArrayBuffer, options: DecodeOptions 
       // for hashing or for a retry, and a transferred buffer is detached.
       const transferable = file.slice(0);
       worker.postMessage(
-        { type: 'DECODE', id, buffer: transferable, withSpectrum: options.withSpectrum !== false },
+        {
+          type: 'DECODE',
+          id,
+          buffer: transferable,
+          withSpectrum: options.withSpectrum !== false,
+          formatHint: options.formatHint,
+          mimeType: options.mimeType
+        },
         [transferable]
       );
     });
     return result;
-  } catch {
-    // Worker unavailable or crashed — same work, on the main thread.
+  } catch (error) {
+    if (error instanceof DecodeError) throw error;
+    if (options.signal?.aborted) throw new DecodeError('Decoding was cancelled.', 'CANCELLED');
+    // Worker unavailable or crashed — same native + local-codec fallback, on the main thread.
     const fallback = await decodeOnMainThread(file, options);
     return { ...fallback, ranInWorker: false };
   }

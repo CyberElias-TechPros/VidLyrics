@@ -7,13 +7,15 @@
  *    A fresh build always wins on the next load; the cache is never ahead of
  *    the server.
  *  - Only same-origin, hashed, immutable assets are cached (stale-while-revalidate).
- *  - /api, /models and any cross-origin request is NEVER cached.
- *  - On activate, every old cache is deleted, so deploys cannot strand users.
+ *  - /api, /models and any cross-origin request is never cached by this service worker.
+ *    The model workers manage their own consent-aware Cache Storage entries.
+ *  - On activate, every obsolete app cache is deleted, so deploys cannot strand users.
  */
 
 const VERSION = 'vidlyrics-v1';
 const STATIC = `${VERSION}-static`;
 const NAV = `${VERSION}-nav`;
+const WHISPER_MODELS = 'vidlyrics-whisper-models-v1';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -23,7 +25,10 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k !== STATIC && k !== NAV).map((k) => caches.delete(k)));
+      // The user-approved Whisper model cache is versioned independently from
+      // the app shell. Keep it across releases so an old local copy remains
+      // available until the user approves its replacement.
+      await Promise.all(keys.filter((k) => k !== STATIC && k !== NAV && k !== WHISPER_MODELS).map((k) => caches.delete(k)));
       await self.clients.claim();
     })()
   );

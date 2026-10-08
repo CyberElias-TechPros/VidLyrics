@@ -49,6 +49,8 @@ export interface ExportRequest {
   includeAudio: boolean;
   rangeStartUs: Microseconds;
   rangeEndUs: Microseconds;
+  /** Absolute music time represented by sample 0 in interleaved PCM. */
+  audioStartUs?: Microseconds;
   renderOptions: Omit<RenderOptions, 'showGuides'>;
   onProgress?: (progress: ExportProgress) => void;
   signal?: AbortSignal;
@@ -203,7 +205,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
 
   const {
     scene, interleaved, sampleRate, channels, width, height, fps, videoBitrate, audioBitrate,
-    codec, includeAudio, rangeStartUs, rangeEndUs, renderOptions, onProgress, signal
+    codec, includeAudio, rangeStartUs, rangeEndUs, audioStartUs = 0, renderOptions, onProgress, signal
   } = request;
 
   const aborted = () => signal?.aborted === true;
@@ -300,7 +302,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
   report('PREPARING');
 
   try {
-    const sampleOffset = Math.floor((rangeStartUs / 1_000_000) * sampleRate);
+    const sampleOffset = Math.max(0, Math.floor(((rangeStartUs - audioStartUs) / 1_000_000) * sampleRate));
     const audioFramesTotal = Math.floor((durationUs / 1_000_000) * sampleRate);
     // Audio is emitted in ~50 ms blocks. Small blocks keep the muxer's
     // interleaving tight, which is what keeps long exports in sync.
@@ -325,7 +327,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
         // audio lands where the video expects it instead of ~23 ms early.
         const timestampUs = Math.max(
           0,
-          Math.round((absoluteStart / sampleRate) * 1_000_000) - Math.round((AAC_PRIMING_SAMPLES / sampleRate) * 1_000_000)
+          Math.round((audioCursor / sampleRate) * 1_000_000) - Math.round((AAC_PRIMING_SAMPLES / sampleRate) * 1_000_000)
         );
         const block = new AudioData({
           format: 'f32-planar',

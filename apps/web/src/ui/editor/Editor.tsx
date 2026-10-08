@@ -7,14 +7,14 @@ import { DesignPanel, ExportPanel, LyricsPanel } from './Panels';
 import { formatTimecode, usFromMs } from '../../core/time';
 import { tapProgress } from '../../core/timing/tap';
 import {
-  cancelExport, importAudioFile, importProjectFile, loadStoredProject, persist,
+  cancelExport, importAudioFile, relinkAudioFile, importProjectFile, loadStoredProject, persist,
   runExport, seekTo, togglePlayback, nudgePlayhead, disposeSession,
   setLoopRegion, clearLoopRegion
 } from '../../media/session';
 import { listProjects, deleteProject, garbageCollectAssets } from '../../storage/projectRepo';
 import { useHotkeys, useModifierHotkeys } from '../../lib/hooks';
 import { RECOVERY_LABELS } from '../../core/errors';
-import { validateAudioFile, validateLyricsText } from '../../core/validation/files';
+import { classifyFile, validateAudioFile, validateLyricsText } from '../../core/validation/files';
 import { parseLyrics } from '../../core/lyrics/parse';
 
 /**
@@ -133,6 +133,11 @@ export function Editor() {
   const onAudioFiles = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
+    const current = useEditor.getState();
+    if (current.audioMissing && current.project.audio) {
+      await relinkAudioFile(file, current.project.audio.contentHash);
+      return;
+    }
     await importAudioFile(file);
   };
 
@@ -145,8 +150,7 @@ export function Editor() {
   const onLyricFiles = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-    const check = validateAudioFile(file.name, file.type, file.size);
-    if (check.kind === 'audio') {
+    if (classifyFile(file.name, file.type) === 'audio') {
       await importAudioFile(file);
       return;
     }
@@ -180,12 +184,15 @@ export function Editor() {
     setDragOver(false);
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
-    const kind = validateAudioFile(file.name, file.type, file.size).kind;
-    if (kind === 'audio') void importAudioFile(file);
-    else void onLyricFiles(event.dataTransfer.files);
+    const kind = classifyFile(file.name, file.type);
+    if (kind === 'audio' || kind === 'unknown') void onAudioFiles(event.dataTransfer.files);
+    else if (kind === 'lyrics') void onLyricFiles(event.dataTransfer.files);
+    else if (kind === 'project') void onProjectFiles(event.dataTransfer.files);
+    else store.notify({ kind: 'warning', title: 'Unsupported drop', detail: 'Choose an audio file, lyrics file, or VidLyrics project.' });
   };
 
   const busy = render.state === 'RENDERING' || render.state === 'ENCODING' || render.state === 'PREPARING' || render.state === 'MUXING' || render.state === 'QUEUED';
+  const relinkingAudio = media.state === 'IMPORTING' || media.state === 'DECODING' || media.state === 'ANALYZING';
 
   return (
     <div
@@ -198,7 +205,7 @@ export function Editor() {
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
-      <input ref={audioInputRef} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.opus" className="sr-only" onChange={(e) => void onAudioFiles(e.target.files)} />
+      <input ref={audioInputRef} type="file" accept="audio/*,video/*,application/octet-stream,.mp3,.mp2,.wav,.flac,.m4a,.m4b,.aac,.ogg,.opus,.aiff,.aif,.aifc,.caf,.amr,.gsm,.wma,.ape,.wv,.tta,.mpc,.dsf,.dff,.eac3,.ac3,.dts,.qoa,.mod,.xm,.s3m,.it,.mpa,.m1a,.m2a,.mkv,.mka,.avi,.mov,.m4v,.3gp,.3g2" className="sr-only" onChange={(e) => { void onAudioFiles(e.target.files); e.currentTarget.value = ''; }} />
       <input ref={projectInputRef} type="file" accept=".vidlyricsproject,.vlsp,.json" className="sr-only" onChange={(e) => void onProjectFiles(e.target.files)} />
       <input ref={lyricInputRef} type="file" accept=".lrc,.srt,.vtt,.ass,.ssa,.txt,.json" className="sr-only" onChange={(e) => void onLyricFiles(e.target.files)} />
 
@@ -272,7 +279,28 @@ export function Editor() {
 
       {/* ---------------- stage ---------------- */}
       <main className="ed-stage">
-        {media.error || (!project.audio && media.state !== 'READY') ? (
+        {store.audioMissing && project.audio ? (
+          <div className="ed-empty" style={{ gridRow: '1 / 3', placeSelf: 'center' }} role="alert">
+            <h2>Re-link your audio</h2>
+            <p>
+              This project still has its lyrics and timing, but the original track “{project.audio.fileName}”
+              is not available in this browser. Select the same audio file to restore playback and keep
+              the existing timing aligned; VidLyrics verifies it by content hash.
+            </p>
+            {relinkingAudio ? <p className="ed-hint" role="status">Verifying and loading the selected audio locally…</p> : null}
+            {media.state === 'FAILED' && media.error ? (
+              <div className="ed-banner" data-kind="error" style={{ textAlign: 'left', maxWidth: 460 }}>
+                <h3>{media.error.title}</h3>
+                <p>{media.error.detail}</p>
+              </div>
+            ) : null}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button className="btn btn-primary" onClick={() => audioInputRef.current?.click()} disabled={relinkingAudio}>{relinkingAudio ? 'Relinking…' : 'Re-link'}</button>
+              <button className="btn btn-ghost" onClick={() => lyricInputRef.current?.click()}>Import lyrics</button>
+              <button className="btn btn-ghost" onClick={() => projectInputRef.current?.click()}>Open project</button>
+            </div>
+          </div>
+        ) : media.error || (!project.audio && media.state !== 'READY') ? (
           <div className="ed-empty" style={{ gridRow: '1 / 3', placeSelf: 'center' }}>
             <h2>Start with a track</h2>
             <p>

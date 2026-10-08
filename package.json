@@ -12,12 +12,15 @@
   "scripts": {
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
+    "build:app-only": "npm run build:app-only --workspace apps/web",
+    "bundle-models": "npm run bundle-models --workspace apps/web",
+    "bundle-models:dry-run": "npm run bundle-models:dry-run --workspace apps/web",
     "preview": "npm run preview --workspace apps/web",
     "typecheck": "npm run typecheck --workspace apps/web && npm run typecheck --workspace worker",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run typecheck && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run test && npm run build:app-only"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

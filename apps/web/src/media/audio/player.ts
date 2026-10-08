@@ -36,11 +36,25 @@ export interface PlayerEvents {
   onEnded?: () => void;
 }
 
+function createAudioContext(): AudioContext {
+  const Ctor: typeof AudioContext | undefined =
+    (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
+    (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) throw new Error('Web Audio is unavailable.');
+  return new Ctor();
+}
+
 export class PlaybackEngine {
   private context: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private voiceSource: AudioBufferSourceNode | null = null;
   private buffer: AudioBuffer | null = null;
+  private voiceBuffer: AudioBuffer | null = null;
   private gain: GainNode | null = null;
+  private voiceGain: GainNode | null = null;
+  private voiceTimelineOffsetUs = 0;
+  private musicMixGain = 1;
+  private speechMixGain = 0;
   private startedAt = 0;
   private seekOffsetUs: Microseconds = 0;
   private state: PlaybackState = 'idle';
@@ -73,19 +87,27 @@ export class PlaybackEngine {
     if (!Ctor) throw new Error('Web Audio is unavailable.');
     this.context = new Ctor();
     this.gain = this.context.createGain();
-    this.gain.gain.value = this.volume;
+    this.gain.gain.value = this.volume * this.musicMixGain;
     this.gain.connect(this.context.destination);
+    this.voiceGain = this.context.createGain();
+    this.voiceGain.gain.value = this.speechMixGain;
+    this.voiceGain.connect(this.context.destination);
     return this.context;
   }
 
   setBuffer(pcmInterleaved: Float32Array, sampleRate: number, channels: number): void {
     this.stopSource();
-    const context = this.context ?? new ((globalThis as { AudioContext: typeof AudioContext }).AudioContext)();
+    const context = this.context ?? createAudioContext();
     this.context = context;
     if (!this.gain) {
       this.gain = context.createGain();
-      this.gain.gain.value = this.volume;
+      this.gain.gain.value = this.volume * this.musicMixGain;
       this.gain.connect(context.destination);
+    }
+    if (!this.voiceGain) {
+      this.voiceGain = context.createGain();
+      this.voiceGain.gain.value = this.speechMixGain;
+      this.voiceGain.connect(context.destination);
     }
     const frames = Math.floor(pcmInterleaved.length / Math.max(1, channels));
     const buffer = context.createBuffer(channels, frames, sampleRate);
@@ -96,6 +118,56 @@ export class PlaybackEngine {
     this.buffer = buffer;
     this.seekOffsetUs = 0;
     this.setState('paused');
+  }
+
+  /** Install the mono TTS track; it remains independent until playback/export mix it. */
+  setVoiceoverBuffer(pcm: Float32Array | null, sampleRate: number): void {
+    const wasPlaying = this.state === 'playing';
+    const position = this.positionUs;
+    if (this.voiceSource) {
+      this.voiceSource.onended = null;
+      try {
+        this.voiceSource.stop();
+      } catch {
+        /* already stopped */
+      }
+      this.voiceSource.disconnect();
+      this.voiceSource = null;
+    }
+    if (pcm && pcm.length > 0 && sampleRate > 0) {
+      const context = this.context ?? createAudioContext();
+      this.context = context;
+      if (!this.gain) {
+        this.gain = context.createGain();
+        this.gain.gain.value = this.volume * this.musicMixGain;
+        this.gain.connect(context.destination);
+      }
+      if (!this.voiceGain) {
+        this.voiceGain = context.createGain();
+        this.voiceGain.gain.value = this.speechMixGain;
+        this.voiceGain.connect(context.destination);
+      }
+      const buffer = context.createBuffer(1, pcm.length, sampleRate);
+      buffer.getChannelData(0).set(pcm);
+      this.voiceBuffer = buffer;
+    } else {
+      this.voiceBuffer = null;
+    }
+    if (wasPlaying) this.startVoiceoverSource(position);
+  }
+
+  /** Update playback-only ducking and timeline placement without rebuilding PCM. */
+  setVoiceoverMix(options: { enabled: boolean; timelineOffsetUs: number; musicGain: number; speechGain: number }): void {
+    const offsetChanged = this.voiceTimelineOffsetUs !== options.timelineOffsetUs;
+    const speechWasEnabled = this.speechMixGain > 0;
+    const wasPlaying = this.state === 'playing';
+    const position = this.positionUs;
+    this.voiceTimelineOffsetUs = Number.isFinite(options.timelineOffsetUs) ? options.timelineOffsetUs : 0;
+    this.musicMixGain = options.enabled ? Math.max(0, Math.min(2, options.musicGain)) : 1;
+    this.speechMixGain = options.enabled ? Math.max(0, Math.min(2, options.speechGain)) : 0;
+    if (this.gain) this.gain.gain.value = this.volume * this.musicMixGain;
+    if (this.voiceGain) this.voiceGain.gain.value = this.speechMixGain;
+    if (wasPlaying && (offsetChanged || speechWasEnabled !== (this.speechMixGain > 0))) void this.play(position);
   }
 
   private setState(state: PlaybackState): void {
@@ -115,6 +187,32 @@ export class PlaybackEngine {
       this.source.disconnect();
       this.source = null;
     }
+    if (this.voiceSource) {
+      this.voiceSource.onended = null;
+      try {
+        this.voiceSource.stop();
+      } catch {
+        /* already stopped */
+      }
+      this.voiceSource.disconnect();
+      this.voiceSource = null;
+    }
+  }
+
+  private startVoiceoverSource(positionUs: Microseconds): void {
+    if (!this.context || !this.voiceGain || !this.voiceBuffer || this.speechMixGain <= 0) return;
+    const voiceTimeUs = positionUs - this.voiceTimelineOffsetUs;
+    const voiceDurationUs = usFromSeconds(this.voiceBuffer.duration);
+    if (voiceTimeUs >= voiceDurationUs) return;
+
+    const source = this.context.createBufferSource();
+    source.buffer = this.voiceBuffer;
+    source.playbackRate.value = this.rate;
+    source.connect(this.voiceGain);
+    const delaySeconds = voiceTimeUs < 0 ? -voiceTimeUs / (1_000_000 * this.rate) : 0;
+    const offsetSeconds = Math.max(0, voiceTimeUs / 1_000_000);
+    source.start(this.context.currentTime + delaySeconds, offsetSeconds);
+    this.voiceSource = source;
   }
 
   /** Returns false when the browser refused to start (needs a gesture). */
@@ -142,11 +240,14 @@ export class PlaybackEngine {
     source.connect(this.gain);
     source.onended = () => {
       if (this.source !== source) return;
+      this.stopSource();
       this.setState('paused');
+      this.stopTicker();
       this.events.onEnded?.();
     };
     source.start(0, usToSeconds(clamped));
     this.source = source;
+    this.startVoiceoverSource(clamped);
     this.startedAt = this.context.currentTime;
     this.setState('playing');
     this.startTicker();
@@ -195,11 +296,12 @@ export class PlaybackEngine {
   setRate(rate: number): void {
     this.rate = Math.max(0.25, Math.min(2, rate));
     if (this.source) this.source.playbackRate.value = this.rate;
+    if (this.voiceSource) this.voiceSource.playbackRate.value = this.rate;
   }
 
   setVolume(value: number): void {
     this.volume = Math.max(0, Math.min(1, value));
-    if (this.gain) this.gain.gain.value = this.volume;
+    if (this.gain) this.gain.gain.value = this.volume * this.musicMixGain;
   }
 
   /**
@@ -251,6 +353,8 @@ export class PlaybackEngine {
     void this.context?.close().catch(() => undefined);
     this.context = null;
     this.buffer = null;
+    this.voiceBuffer = null;
     this.gain = null;
+    this.voiceGain = null;
   }
 }

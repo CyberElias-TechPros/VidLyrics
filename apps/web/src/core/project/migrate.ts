@@ -37,12 +37,11 @@ type Migration = { from: number; name: string; apply: (project: Record<string, u
  * Keeping it a table (rather than a chain of ifs) makes the order auditable.
  */
 export const MIGRATIONS: Migration[] = [
-  // Example of the shape future migrations must take:
-  // {
-  //   from: 1,
-  //   name: 'v1 -> v2: add design.accent',
-  //   apply: (p) => { ...; return p; }
-  // }
+  {
+    from: 1,
+    name: 'v1 -> v2: add generated voiceover metadata',
+    apply: (project) => ({ ...project, voiceover: project.voiceover ?? null })
+  }
 ];
 
 export function needsMigration(formatVersion: number): boolean {
@@ -137,6 +136,7 @@ function fillDefaults(project: Record<string, unknown>): string[] {
 
   set('sections', project, 'sections', []);
   set('audio', project, 'audio', null);
+  set('voiceover', project, 'voiceover', null);
 
   set('lyrics', project, 'lyrics', { source: 'empty', originalText: '', originalFileName: null, lines: [] });
   const lyrics = project.lyrics as Record<string, unknown>;

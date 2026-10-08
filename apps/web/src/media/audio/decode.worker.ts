@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { computePeaks } from '../../core/audio/peaks';
 import { computeSpectrum, type SpectrumEnvelope } from '../../core/audio/spectrum';
+import { CompatibilityDecodeError, decodeWithCompatibilityCodec } from './compatDecode';
 
 /**
  * Audio decode + analysis worker.
@@ -21,6 +22,8 @@ export interface DecodeRequest {
   /** Target sample rate for the analysis pass; null keeps the file's rate. */
   analysisSampleRate?: number;
   withSpectrum?: boolean;
+  formatHint?: string;
+  mimeType?: string;
 }
 
 export interface DecodeResponse {
@@ -40,7 +43,7 @@ export interface ErrorResponse {
   type: 'DECODE_RESULT';
   id: number;
   ok: false;
-  errorCode: 'AUDIO_DECODE_FAILED' | 'AUDIO_EMPTY' | 'CANCELLED';
+  errorCode: 'AUDIO_UNSUPPORTED_FORMAT' | 'AUDIO_DECODE_FAILED' | 'AUDIO_EMPTY' | 'CANCELLED';
   message: string;
 }
 
@@ -88,13 +91,28 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>) => {
 
   try {
     post({ type: 'PROGRESS', id: request.id, stage: 'decoding', progress: 0.1 });
-    const audioBuffer = await decodeBuffer(request.buffer, request.analysisSampleRate);
+    let channelData: Float32Array[];
+    let sampleRate: number;
+    let durationSeconds: number;
+    try {
+      const audioBuffer = await decodeBuffer(request.buffer, request.analysisSampleRate);
+      channelData = Array.from({ length: audioBuffer.numberOfChannels }, (_, channel) => audioBuffer.getChannelData(channel));
+      sampleRate = audioBuffer.sampleRate;
+      durationSeconds = audioBuffer.duration;
+    } catch (nativeError) {
+      if (cancelled) throw nativeError;
+      post({ type: 'PROGRESS', id: request.id, stage: 'decoding', progress: 0.2 });
+      const compatible = await decodeWithCompatibilityCodec(request.buffer, request.formatHint, request.mimeType);
+      channelData = compatible.channelData;
+      sampleRate = compatible.sampleRate;
+      durationSeconds = Math.min(...channelData.map((channel) => channel.length)) / sampleRate;
+    }
+    if (cancelled) throw new DOMException('Cancelled', 'AbortError');
 
-    const channels = audioBuffer.numberOfChannels;
-    const length = audioBuffer.length;
+    const channels = channelData.length;
+    const length = Math.min(...channelData.map((channel) => channel.length));
+    if (channels === 0 || length <= 0) throw new Error('empty');
     const interleaved = new Float32Array(length * channels);
-    const channelData: Float32Array[] = [];
-    for (let c = 0; c < channels; c += 1) channelData.push(audioBuffer.getChannelData(c));
     for (let i = 0; i < length; i += 1) {
       for (let c = 0; c < channels; c += 1) interleaved[i * channels + c] = channelData[c]?.[i] ?? 0;
     }
@@ -108,7 +126,7 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>) => {
     }
 
     post({ type: 'PROGRESS', id: request.id, stage: 'peaks', progress: 0 });
-    const peaks = await computePeaks(pcm, audioBuffer.sampleRate, 1, {
+    const peaks = await computePeaks(pcm, sampleRate, 1, {
       onProgress: (p) => post({ type: 'PROGRESS', id: request.id, stage: 'peaks', progress: p }),
       shouldCancel: () => cancelled
     });
@@ -116,7 +134,7 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>) => {
     let spectrum: SpectrumEnvelope | null = null;
     if (request.withSpectrum !== false) {
       post({ type: 'PROGRESS', id: request.id, stage: 'spectrum', progress: 0 });
-      spectrum = await computeSpectrum(pcm, audioBuffer.sampleRate, {
+      spectrum = await computeSpectrum(pcm, sampleRate, {
         onProgress: (p) => post({ type: 'PROGRESS', id: request.id, stage: 'spectrum', progress: p }),
         shouldCancel: () => cancelled
       });
@@ -128,15 +146,21 @@ self.onmessage = async (event: MessageEvent<DecodeRequest>) => {
       ok: true,
       pcm,
       interleaved,
-      sampleRate: audioBuffer.sampleRate,
+      sampleRate,
       channels,
-      durationSeconds: audioBuffer.duration,
+      durationSeconds,
       peaks,
       spectrum
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const errorCode: ErrorResponse['errorCode'] = cancelled ? 'CANCELLED' : message === 'empty' ? 'AUDIO_EMPTY' : 'AUDIO_DECODE_FAILED';
+    const errorCode: ErrorResponse['errorCode'] = cancelled
+      ? 'CANCELLED'
+      : error instanceof CompatibilityDecodeError
+        ? error.errorCode
+        : message === 'empty'
+          ? 'AUDIO_EMPTY'
+          : 'AUDIO_DECODE_FAILED';
     post({ type: 'DECODE_RESULT', id: request.id, ok: false, errorCode, message });
   }
 };

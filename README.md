@@ -1,4 +1,19 @@
 # BUILD PROMPT — Lyrics Video Studio
+
+## Current speech-model packaging (2026-10-08)
+
+The production `npm run build` creates a same-origin, versioned model pack alongside the app. It includes Whisper Tiny/Base and every Piper voice offered in the editor. The packer downloads the weights during the release build, verifies Piper files against upstream checksums, includes each voice's upstream `MODEL_CARD` plus the Whisper MIT notice, and splits files into 20 MiB chunks for static hosting. Large model binaries are generated under `apps/web/public/models/` and are intentionally ignored by Git.
+
+- `npm run bundle-models:dry-run` lists the model pack without downloading it.
+- `npm run build` downloads and packages the full model set; the build environment must be able to reach the upstream model hosts.
+- `npm run build:app-only` builds the UI without weights for fast local verification. It is not a deployable speech-model release; generation will report that the model pack is missing.
+- Expect roughly **0.85 GB** of weights before compression. The hosting provider must support the total static deployment and individual 20 MiB model chunks. Only the selected model is fetched from the app's own origin into local browser storage when used; inference remains in the browser.
+- If a later app release changes a model's checksum, VidLyrics asks before fetching that model's replacement. Declining keeps the prior cached copy when it is still available.
+
+Audio import tries the browser's decoder first, then same-origin bundled local decoders for MP3, AAC/ADTS, FLAC, Ogg Vorbis/Opus, WAV, AIFF, CAF, AMR/GSM, WMA, APE, AC-3/E-AC-3, WavPack, TTA, Musepack, DSF/DFF, QOA, and MOD/XM/S3M/IT modules. AAC and common 16/24-bit mono/stereo ALAC tracks also have local fallbacks in MP4/M4A/MOV/3GP containers. File signatures take precedence over extensions and MIME labels, and unknown binary files can be attempted. Other codecs in MP4-family files, plus WebM/MKV and AVI, still depend on the browser's native codec support; no finite decoder pack can read every proprietary, encrypted, malformed, or future codec. Audio stays on-device.
+
+Piper voice licences are individual. The pack includes each upstream model card; review those terms before redistribution or commercial use. Do not commit generated weights to Git.
+
 You are the principal engineer, product owner, and art director for a greenfield web application. Build it, verify it, and report honestly on what you verified.
 
 1. The product
