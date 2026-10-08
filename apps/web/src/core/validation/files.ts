@@ -6,8 +6,9 @@ import type { ErrorCode } from '../errors';
  * Input validation for user-supplied files.
  *
  * Everything here is a pure function so it can be tested without a browser, and
- * so the exact same rules run before a decode attempt (fast, clear error) and
- * after it (defence in depth).
+ * so inexpensive checks (empty/oversize and obvious non-media files) happen
+ * before decoding; codec recognition is deferred to the browser and bundled
+ * local decoders because extensions and MIME types are not reliable.
  */
 
 export const MAX_AUDIO_BYTES = 250 * 1024 * 1024; // 250 MB
@@ -15,7 +16,13 @@ export const SOFT_AUDIO_BYTES = 80 * 1024 * 1024; // warn, do not block
 export const MAX_AUDIO_DURATION_US: Microseconds = usFromSeconds(60 * 20); // 20 minutes
 export const SOFT_AUDIO_DURATION_US: Microseconds = usFromSeconds(60 * 6);
 
-export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'webm', 'aiff', 'aif', 'mp4'];
+// Candidate audio files include common and long-tail codecs/containers. The
+// decoder sniffs file signatures and may reject codecs unavailable locally.
+export const AUDIO_EXTENSIONS = [
+  'mp3', 'mp2', 'wav', 'wave', 'flac', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'webm', 'aiff', 'aif', 'aifc', 'caf',
+  'mp4', 'mov', 'm4v', '3gp', '3g2', 'mkv', 'mka', 'avi', 'amr', 'gsm', 'wma', 'ape', 'wv', 'tta', 'mpc', 'dsf', 'dff',
+  'eac3', 'ac3', 'dts', 'qoa', 'mod', 'xm', 's3m', 'it', 'mpa', 'm1a', 'm2a', 'au', 'snd', 'voc', 'mpg', 'mpeg'
+];
 
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'];
 
@@ -40,7 +47,8 @@ export function extensionOf(name: string): string {
 
 export function classifyFile(name: string, mimeType: string): FileKind {
   const ext = extensionOf(name);
-  if (AUDIO_EXTENSIONS.includes(ext) || mimeType.startsWith('audio/')) return 'audio';
+  const normalizedMime = mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  if (AUDIO_EXTENSIONS.includes(ext) || normalizedMime.startsWith('audio/') || normalizedMime.startsWith('video/') || normalizedMime === 'application/ogg') return 'audio';
   if (IMAGE_EXTENSIONS.includes(ext) || mimeType.startsWith('image/')) return 'image';
   if (ext === 'vidlyricsproject' || ext === 'vlsp') return 'project';
   if (LYRIC_EXTENSIONS.includes(ext)) return 'lyrics';
@@ -49,13 +57,15 @@ export function classifyFile(name: string, mimeType: string): FileKind {
 }
 
 export function validateAudioFile(name: string, mimeType: string, bytes: number): FileCheck {
-  const ext = extensionOf(name);
+  const kind = classifyFile(name, mimeType);
   if (bytes === 0) {
     return { ok: false, errorCode: 'AUDIO_EMPTY', kind: 'audio' };
   }
-  if (!AUDIO_EXTENSIONS.includes(ext) && !mimeType.startsWith('audio/')) {
+  if (kind === 'lyrics' || kind === 'image' || kind === 'project') {
     return { ok: false, errorCode: 'AUDIO_UNSUPPORTED_FORMAT', kind: 'audio' };
   }
+  // `unknown` is intentionally allowed: the file signature may identify an
+  // audio codec whose extension or MIME type is not in our candidate catalog.
   if (bytes > MAX_AUDIO_BYTES) {
     return { ok: false, errorCode: 'AUDIO_TOO_LARGE', kind: 'audio' };
   }

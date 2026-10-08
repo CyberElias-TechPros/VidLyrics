@@ -156,6 +156,12 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
             <tr><td>zustand</td><td>MIT</td><td>Editor state</td></tr>
             <tr><td>zod</td><td>MIT</td><td>Runtime validation of imported projects</td></tr>
             <tr><td>mp4-muxer</td><td>BSD-3-Clause</td><td>MP4 container muxing during export</td></tr>
+            <tr><td>audio-type</td><td>MIT</td><td>Local audio signature detection</td></tr>
+            <tr><td>@audio/decode-* and @wasm-audio-decoders/aac</td><td>MIT / Apache-2.0 / BSD-3-Clause</td><td>Code-split local decoders for common and specialist audio codecs</td></tr>
+            <tr><td>mp4box</td><td>BSD-3-Clause</td><td>Local MP4-family audio track demuxing</td></tr>
+            <tr><td>@mgz-dev/alac</td><td>MIT</td><td>Local decoding for common 16/24-bit mono/stereo ALAC tracks in MP4-family files</td></tr>
+            <tr><td>codec-parser</td><td>LGPL-3.0-or-later</td><td>Audio frame/container parsing used by bundled decoders</td></tr>
+            <tr><td>@audio/decode-ape, @audio/decode-eac3, @audio/decode-wma</td><td>LGPL-2.1-or-later</td><td>Optional local decoding for APE, AC-3/E-AC-3, and WMA</td></tr>
             <tr><td>@fugood/node-whisper-wasm</td><td>MIT</td><td>Bundled Whisper WASM runtime</td></tr>
             <tr><td>@mintplex-labs/piper-tts-web</td><td>MIT</td><td>Browser Piper inference engine</td></tr>
             <tr><td>@diffusionstudio/piper-wasm, onnxruntime-web</td><td>MIT</td><td>Bundled Piper and ONNX WASM runtimes</td></tr>
@@ -166,6 +172,11 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
             <tr><td>wrangler, @cloudflare/workers-types</td><td>MIT / Apache-2.0</td><td>Edge worker tooling</td></tr>
           </tbody>
         </table>
+        <p>
+          Full redistribution notices for the MP4-family fallbacks: <a href="/licenses/mp4box-BSD-3-Clause.txt">MP4Box BSD-3-Clause</a>,{' '}
+          <a href="/licenses/mgz-dev-alac-MIT.txt">@mgz-dev/alac MIT licence</a>, and{' '}
+          <a href="/licenses/mgz-dev-alac-NOTICE.txt">its upstream ALAC notices</a>.
+        </p>
         <h2>Fonts</h2>
         <p>
           No font files are shipped or loaded from a network. The application uses system font stacks,

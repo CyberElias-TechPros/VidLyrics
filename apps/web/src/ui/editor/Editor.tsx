@@ -14,7 +14,7 @@ import {
 import { listProjects, deleteProject, garbageCollectAssets } from '../../storage/projectRepo';
 import { useHotkeys, useModifierHotkeys } from '../../lib/hooks';
 import { RECOVERY_LABELS } from '../../core/errors';
-import { validateAudioFile, validateLyricsText } from '../../core/validation/files';
+import { classifyFile, validateAudioFile, validateLyricsText } from '../../core/validation/files';
 import { parseLyrics } from '../../core/lyrics/parse';
 
 /**
@@ -150,8 +150,7 @@ export function Editor() {
   const onLyricFiles = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-    const check = validateAudioFile(file.name, file.type, file.size);
-    if (check.kind === 'audio') {
+    if (classifyFile(file.name, file.type) === 'audio') {
       await importAudioFile(file);
       return;
     }
@@ -185,9 +184,11 @@ export function Editor() {
     setDragOver(false);
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
-    const kind = validateAudioFile(file.name, file.type, file.size).kind;
-    if (kind === 'audio') void onAudioFiles(event.dataTransfer.files);
-    else void onLyricFiles(event.dataTransfer.files);
+    const kind = classifyFile(file.name, file.type);
+    if (kind === 'audio' || kind === 'unknown') void onAudioFiles(event.dataTransfer.files);
+    else if (kind === 'lyrics') void onLyricFiles(event.dataTransfer.files);
+    else if (kind === 'project') void onProjectFiles(event.dataTransfer.files);
+    else store.notify({ kind: 'warning', title: 'Unsupported drop', detail: 'Choose an audio file, lyrics file, or VidLyrics project.' });
   };
 
   const busy = render.state === 'RENDERING' || render.state === 'ENCODING' || render.state === 'PREPARING' || render.state === 'MUXING' || render.state === 'QUEUED';
@@ -204,7 +205,7 @@ export function Editor() {
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
-      <input ref={audioInputRef} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.opus" className="sr-only" onChange={(e) => { void onAudioFiles(e.target.files); e.currentTarget.value = ''; }} />
+      <input ref={audioInputRef} type="file" accept="audio/*,video/*,application/octet-stream,.mp3,.mp2,.wav,.flac,.m4a,.m4b,.aac,.ogg,.opus,.aiff,.aif,.aifc,.caf,.amr,.gsm,.wma,.ape,.wv,.tta,.mpc,.dsf,.dff,.eac3,.ac3,.dts,.qoa,.mod,.xm,.s3m,.it,.mpa,.m1a,.m2a,.mkv,.mka,.avi,.mov,.m4v,.3gp,.3g2" className="sr-only" onChange={(e) => { void onAudioFiles(e.target.files); e.currentTarget.value = ''; }} />
       <input ref={projectInputRef} type="file" accept=".vidlyricsproject,.vlsp,.json" className="sr-only" onChange={(e) => void onProjectFiles(e.target.files)} />
       <input ref={lyricInputRef} type="file" accept=".lrc,.srt,.vtt,.ass,.ssa,.txt,.json" className="sr-only" onChange={(e) => void onLyricFiles(e.target.files)} />
 

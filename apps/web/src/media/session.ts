@@ -5,7 +5,7 @@ import { mixVoiceover, voiceoverSourceSignature } from '../core/audio/voiceover'
 import { whisperSegmentsToCues, untimedTranscriptCue } from '../core/lyrics/transcript';
 import { isInstrumentalMarker } from '../core/lyrics/normalize';
 import { appError, type ErrorCode } from '../core/errors';
-import { sha256Hex, sanitizeFileName, validateAudioFile, validateAudioDuration, MAX_AUDIO_BYTES } from '../core/validation/files';
+import { sha256Hex, sanitizeFileName, validateAudioFile, validateAudioDuration, extensionOf, MAX_AUDIO_BYTES } from '../core/validation/files';
 import { decodeAudioFile, DecodeError } from './audio/decode';
 import { PlaybackEngine } from './audio/player';
 import { exportVideo, downloadBlob, isExportSupported, checkAudioEncoderSupport, encodeWav, ExportError } from './export/encoder';
@@ -219,6 +219,8 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
     store.setMedia({ state: 'DECODING', stage: 'decoding', progress: 0.05 });
     const result = await decodeAudioFile(buffer, {
       signal,
+      formatHint: extensionOf(file.name),
+      mimeType: file.type,
       onProgress: (stage, progress) => {
         if (!isCurrentImport()) return;
         store.setMedia({
@@ -444,6 +446,8 @@ export async function hydrateAudioFromStorage(): Promise<boolean> {
     const buffer = payload instanceof ArrayBuffer ? payload : await payload.arrayBuffer();
     if (!isCurrentAudio()) return false;
     const result = await decodeAudioFile(buffer, {
+      formatHint: extensionOf(audio.fileName),
+      mimeType: audio.mimeType,
       onProgress: (stage, progress) => { if (isCurrentAudio()) store.setMedia({ stage, progress }); }
     });
     if (!isCurrentAudio()) return false;
