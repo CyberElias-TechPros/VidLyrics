@@ -5,7 +5,7 @@ import { normalizeDisplay, normalizeForMatch } from '../lyrics/normalize';
 import { highlightTokens } from '../lyrics/segment';
 
 /** Current on-disk project format version. Bump only alongside a migration. */
-export const PROJECT_FORMAT_VERSION = 1;
+export const PROJECT_FORMAT_VERSION = 2;
 
 export const APP_NAME = 'Lyrics Video Studio';
 export const APP_VERSION = '1.0.0';
@@ -78,6 +78,7 @@ export function createProject(options: { title?: string; artist?: string; themeI
       notes: ''
     },
     audio: null,
+    voiceover: null,
     lyrics: { source: 'empty', originalText: '', originalFileName: null, lines: [] },
     sections: [],
     design: designFromTheme(options.themeId ?? 'nocturne', '16:9'),

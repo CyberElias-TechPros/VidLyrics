@@ -246,10 +246,11 @@ export function subtitleExtension(format: SubtitleFormat): string {
 /**
  * Build a .vidlyricsproject payload.
  *
- * Binary assets are deliberately NOT embedded. Audio can be hundreds of
+ * Binary assets are deliberately NOT embedded. Source audio can be hundreds of
  * megabytes, and a JSON file that large cannot be parsed on a phone. Instead
- * the file carries an asset manifest with content hashes, and on import the app
- * asks the user to re-link the audio file, verifying the hash matches.
+ * the file carries an asset manifest with content hashes. Source audio can be
+ * re-linked by hash; generated voiceover can be restored from local storage or
+ * regenerated on the device where the project is opened.
  */
 export function buildProjectFile(project: Project, assets: AssetRecord[]): ProjectFile {
   return {

@@ -108,6 +108,8 @@ export async function garbageCollectAssets(): Promise<number> {
       referenced.add(audio.assetId);
       referenced.add(audio.peaksAssetId);
     }
+    const voiceover = stored?.project?.voiceover;
+    if (voiceover) referenced.add(voiceover.assetId);
     const bg = stored?.project?.design?.background;
     if (bg?.assetId) referenced.add(bg.assetId);
     const logo = stored?.project?.design?.brand?.logoAssetId;

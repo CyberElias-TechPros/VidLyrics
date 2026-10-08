@@ -4,9 +4,25 @@ import { THEMES, ASPECTS, EXPORT_PRESETS, getExportPreset, exportSettingsFromPre
 import { SUBTITLE_FORMATS } from '../../core/export/subtitles';
 import { formatClock, formatTimecode, usFromSeconds, usToSeconds } from '../../core/time';
 import { detectInstrumentalRegions } from '../../core/timing/postprocess';
-import { timelineDurationUs, exportSubtitle, exportProjectFile } from '../../media/session';
+import {
+  timelineDurationUs, exportSubtitle, exportProjectFile,
+  transcribeAudio, cancelTranscription, applyGeneratedTranscript, dismissGeneratedTranscript,
+  generateVoiceover, cancelVoiceoverGeneration, downloadGeneratedVoiceover, removeGeneratedVoiceover
+} from '../../media/session';
+import { voiceoverSourceSignature } from '../../core/audio/voiceover';
+import PIPER_VOICES from '../../../model-voices.json';
 
 /* ------------------------------ Lyrics ------------------------------ */
+
+const TRANSCRIPTION_LANGUAGES = [
+  ['auto', 'Auto-detect'], ['en', 'English'], ['yo', 'Yoruba'], ['ig', 'Igbo'], ['ha', 'Hausa'],
+  ['fr', 'French'], ['es', 'Spanish'], ['pt', 'Portuguese'], ['ar', 'Arabic'], ['de', 'German'],
+  ['it', 'Italian'], ['sw', 'Swahili'], ['zh', 'Chinese']
+] as const;
+
+function isGenerationBusy(state: string): boolean {
+  return ['PREPARING', 'DOWNLOADING', 'LOADING', 'RUNNING', 'SAVING'].includes(state);
+}
 
 export function LyricsPanel() {
   const lines = useEditor((s) => s.project.lyrics.lines);
@@ -18,7 +34,18 @@ export function LyricsPanel() {
   const [query, setQuery] = useState('');
   const [pasteOpen, setPasteOpen] = useState(lines.length === 0);
   const [draft, setDraft] = useState('');
+  const [whisperModel, setWhisperModel] = useState<'tiny' | 'base'>('tiny');
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState('auto');
+  const [voiceChoice, setVoiceChoice] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const transcription = store.transcription;
+  const voiceoverJob = store.voiceoverJob;
+  const voiceoverMeta = store.project.voiceover;
+  const selectedVoiceId = voiceChoice ?? voiceoverMeta?.voiceId ?? PIPER_VOICES[0]?.id ?? 'en_US-lessac-medium';
+  const transcriptionBusy = isGenerationBusy(transcription.state);
+  const voiceoverBusy = isGenerationBusy(voiceoverJob.state);
+  const voiceoverFresh = !!voiceoverMeta && voiceoverMeta.sourceSignature === voiceoverSourceSignature(lines);
+  const voiceoverAvailable = !!voiceoverMeta && voiceoverFresh && voiceoverJob.available;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -94,6 +121,120 @@ export function LyricsPanel() {
           </div>
         </div>
       ) : null}
+
+      <div className="ed-panel-section ed-generation-section">
+        <span className="ed-panel-label">Generate subtitles from audio</span>
+        <p className="ed-hint">Whisper models ship with this app release. First use caches the selected model locally; audio stays in this browser and is never uploaded.</p>
+        <div className="ed-generation-controls">
+          <label className="ed-field">
+            <span className="ed-hint">Model</span>
+            <select className="ed-select" value={whisperModel} onChange={(event) => setWhisperModel(event.target.value as 'tiny' | 'base')}>
+              <option value="tiny">Tiny · faster, smaller download</option>
+              <option value="base">Base · larger, often more accurate</option>
+            </select>
+          </label>
+          <label className="ed-field">
+            <span className="ed-hint">Language</span>
+            <select className="ed-select" value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)}>
+              {TRANSCRIPTION_LANGUAGES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="ed-banner-actions">
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={!store.project.audio || store.audioMissing || transcriptionBusy || voiceoverBusy}
+            onClick={() => void transcribeAudio(whisperModel, transcriptionLanguage)}
+          >
+            {transcriptionBusy ? 'Transcribing…' : 'Transcribe audio'}
+          </button>
+          {transcriptionBusy ? <button className="btn btn-sm btn-ghost" onClick={cancelTranscription}>Cancel</button> : null}
+        </div>
+        {!store.project.audio ? <p className="ed-hint">Import a song first to generate timed subtitles.</p> : null}
+        {transcriptionBusy ? (
+          <div className="ed-job-status" role="status" aria-live="polite">
+            <div className="ed-row"><span>{transcription.message || 'Preparing transcription…'}</span><span>{Math.round(transcription.progress * 100)}%</span></div>
+            <div className="ed-progress"><i style={{ width: `${Math.max(0, Math.min(100, transcription.progress * 100))}%` }} /></div>
+          </div>
+        ) : null}
+        {transcription.error ? <p className="ed-generation-error" role="alert">{transcription.error}</p> : null}
+        {transcription.state === 'CANCELLED' ? <p className="ed-hint" role="status">{transcription.message}</p> : null}
+        {transcription.result ? (
+          <div className="ed-banner" data-kind="success">
+            <h3>Transcript ready · {transcription.result.cues.length} cues</h3>
+            <p>Review the preview before applying. Applying replaces the current lyric lines and is undoable.</p>
+            <div className="ed-generated-lines">
+              {transcription.result.cues.slice(0, 5).map((cue, index) => (
+                <div className="ed-generated-line" key={`${cue.startUs}-${index}`}>
+                  <span className="mono">{formatTimecode(cue.startUs)}</span><span>{cue.text}</span>
+                </div>
+              ))}
+              {transcription.result.cues.length > 5 ? <span className="ed-hint">…and {transcription.result.cues.length - 5} more cues</span> : null}
+            </div>
+            <div className="ed-banner-actions">
+              <button className="btn btn-sm btn-primary" onClick={() => void applyGeneratedTranscript()}>
+                {lines.length > 0 ? `Replace ${lines.length} lyric lines` : 'Use generated subtitles'}
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={dismissGeneratedTranscript}>Discard transcript</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="ed-panel-section ed-generation-section">
+        <span className="ed-panel-label">Text-to-speech voiceover</span>
+        <p className="ed-hint">Turn timed lyrics into speech locally. Piper voices ship with this app and are cached in your browser when selected; model updates require your approval.</p>
+        <label className="ed-field">
+          <span className="ed-hint">Voice</span>
+          <select className="ed-select" value={selectedVoiceId} onChange={(event) => setVoiceChoice(event.target.value)}>
+            {PIPER_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+          </select>
+        </label>
+        <div className="ed-banner-actions">
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={lines.length === 0 || voiceoverBusy || transcriptionBusy}
+            onClick={() => void generateVoiceover(selectedVoiceId)}
+          >
+            {voiceoverBusy ? 'Generating speech…' : voiceoverMeta ? 'Regenerate voiceover' : 'Generate voiceover'}
+          </button>
+          {voiceoverBusy ? <button className="btn btn-sm btn-ghost" onClick={cancelVoiceoverGeneration}>Cancel</button> : null}
+        </div>
+        {voiceoverBusy ? (
+          <div className="ed-job-status" role="status" aria-live="polite">
+            <div className="ed-row"><span>{voiceoverJob.message || 'Preparing speech…'}</span><span>{Math.round(voiceoverJob.progress * 100)}%</span></div>
+            <div className="ed-progress"><i style={{ width: `${Math.max(0, Math.min(100, voiceoverJob.progress * 100))}%` }} /></div>
+          </div>
+        ) : null}
+        {voiceoverJob.error ? <p className="ed-generation-error" role="alert">{voiceoverJob.error}</p> : null}
+        {voiceoverJob.state === 'CANCELLED' ? <p className="ed-hint" role="status">{voiceoverJob.message}</p> : null}
+        {voiceoverMeta ? (
+          <div className="ed-voiceover-settings">
+            <div className="ed-banner" data-kind={voiceoverAvailable ? 'success' : 'error'}>
+              <h3>{!voiceoverFresh ? 'Voiceover needs updating' : voiceoverJob.available ? 'Voiceover ready' : 'Voiceover audio missing'}</h3>
+              <p>{voiceoverFresh
+                ? voiceoverJob.available ? `Generated with ${voiceoverMeta.voiceId}. Voice track spans ${voiceoverMeta.durationUs ? formatClock(voiceoverMeta.durationUs) : 'the lyric timeline'}.` : 'The voiceover audio is not in this browser. Reopen the project where it was generated or regenerate it.'
+                : 'Lyric text or timings changed since this voiceover was generated. Regenerate it before playback or export.'}</p>
+            </div>
+            <label className="ed-check-row">
+              <input type="checkbox" checked={voiceoverMeta.enabled} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ enabled: event.target.checked })} />
+              <span>Include voiceover in playback and video export</span>
+            </label>
+            <label className="ed-field">
+              <span className="ed-row"><span className="ed-hint">Song volume</span><span className="mono">{Math.round(voiceoverMeta.musicGain * 100)}%</span></span>
+              <input className="ed-range" type="range" min="0" max="1.5" step="0.05" value={voiceoverMeta.musicGain} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ musicGain: Number(event.target.value) })} />
+            </label>
+            <label className="ed-field">
+              <span className="ed-row"><span className="ed-hint">Speech volume</span><span className="mono">{Math.round(voiceoverMeta.speechGain * 100)}%</span></span>
+              <input className="ed-range" type="range" min="0" max="1.5" step="0.05" value={voiceoverMeta.speechGain} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ speechGain: Number(event.target.value) })} />
+            </label>
+            <div className="ed-banner-actions">
+              <button className="btn btn-sm btn-ghost" disabled={!voiceoverJob.available} onClick={downloadGeneratedVoiceover}>Download WAV</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => void removeGeneratedVoiceover()}>Remove voiceover</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       {lines.length === 0 ? (
         <div className="ed-banner">

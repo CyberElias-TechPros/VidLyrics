@@ -60,7 +60,7 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
   },
   privacy: {
     title: 'Privacy',
-    updated: '2026-09-16',
+    updated: '2026-10-08',
     body: (
       <>
         <p>
@@ -87,8 +87,9 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
             in the support page, and it is not required for any feature.
           </li>
           <li>
-            If automatic alignment models are downloaded, that is a normal file download from the
-            content endpoint. No query about your content is sent.
+            Speech-model weights ship with the app release and are fetched only from this app's own
+            origin when you use a model. A later model version is not installed until you approve the
+            update. No query about your audio or lyrics is sent.
           </li>
         </ul>
         <h2>Storage and deletion</h2>
@@ -138,12 +139,12 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
   },
   licenses: {
     title: 'Open-source licences',
-    updated: '2026-09-16',
+    updated: '2026-10-08',
     body: (
       <>
         <p>
-          Every dependency shipped to the browser is listed here with its licence. Nothing with a
-          licence that would restrict redistribution or embedding in exported video is included.
+          Software dependencies and model weights have separate licences. The code dependencies are
+          listed below; speech models include their own upstream licence and attribution files.
         </p>
         <table>
           <thead>
@@ -155,6 +156,11 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
             <tr><td>zustand</td><td>MIT</td><td>Editor state</td></tr>
             <tr><td>zod</td><td>MIT</td><td>Runtime validation of imported projects</td></tr>
             <tr><td>mp4-muxer</td><td>BSD-3-Clause</td><td>MP4 container muxing during export</td></tr>
+            <tr><td>@fugood/node-whisper-wasm</td><td>MIT</td><td>Bundled Whisper WASM runtime</td></tr>
+            <tr><td>@mintplex-labs/piper-tts-web</td><td>MIT</td><td>Browser Piper inference engine</td></tr>
+            <tr><td>@diffusionstudio/piper-wasm, onnxruntime-web</td><td>MIT</td><td>Bundled Piper and ONNX WASM runtimes</td></tr>
+            <tr><td>Whisper.cpp model weights</td><td>MIT</td><td>On-device subtitle transcription</td></tr>
+            <tr><td>Piper voice models</td><td>Per-voice model card</td><td>On-device text-to-speech; each release includes its upstream MODEL_CARD</td></tr>
             <tr><td>vite, @vitejs/plugin-react</td><td>MIT</td><td>Build tooling (not shipped)</td></tr>
             <tr><td>vitest</td><td>MIT</td><td>Tests (not shipped)</td></tr>
             <tr><td>wrangler, @cloudflare/workers-types</td><td>MIT / Apache-2.0</td><td>Edge worker tooling</td></tr>
@@ -168,9 +174,16 @@ const DOCS: Record<string, { title: string; updated: string; body: React.ReactNo
         </p>
         <h2>AI models</h2>
         <p>
-          No model weights are bundled in this build. Where model-backed alignment is added, the model
-          and its licence will be listed here before it is offered, and the download will be labelled
-          with its size and licence at the point of download.
+          Whisper Tiny/Base and the offered Piper voices are shipped as a versioned model pack with
+          the app release, split into small same-origin files for static hosting. Only the selected
+          model is copied into browser storage when used. The app performs inference locally; audio
+          and lyrics are never sent to a model host.
+        </p>
+        <p>
+          Model updates are presented for approval before the browser replaces its cached model. The
+          pack manifest at <a href="/models/manifest.json">/models/manifest.json</a> records each
+          model's version, size, checksums and included Piper MODEL_CARD. Piper voice licences vary;
+          review the relevant model card before redistributing or using a voice commercially.
         </p>
       </>
     )

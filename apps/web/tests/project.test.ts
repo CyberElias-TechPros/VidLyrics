@@ -55,6 +55,15 @@ describe('project schema', () => {
     }
   });
 
+  it('migrates v1 projects with no generated voiceover metadata', () => {
+    const raw = JSON.parse(JSON.stringify(createProject())) as Record<string, unknown>;
+    raw.formatVersion = 1;
+    delete raw.voiceover;
+    const { project, report } = loadProjectJson(raw);
+    expect(project.voiceover).toBeNull();
+    expect(report.steps).toContain('v1 -> v2: add generated voiceover metadata');
+  });
+
   it('loads an older file and fills missing defaults without corrupting data', () => {
     const raw = JSON.parse(JSON.stringify(projectWithLines())) as Record<string, unknown>;
     raw.formatVersion = PROJECT_FORMAT_VERSION;
@@ -71,9 +80,22 @@ describe('project schema', () => {
     expect(() => loadProjectJson(null)).toThrowError(ProjectFormatError);
   });
 
-  it('validates a full project file envelope', () => {
-    const file = buildProjectFile(projectWithLines(), []);
-    expect(validateProjectFile(JSON.parse(JSON.stringify(file))).ok).toBe(true);
+  it('validates a project-file envelope with a generated voiceover asset manifest', () => {
+    const project = projectWithLines();
+    project.voiceover = {
+      assetId: 'vo_asset', fileName: 'voiceover.wav', mimeType: 'audio/wav', bytes: 128,
+      contentHash: 'voice-hash', sampleRate: 22_050, durationUs: usFromSeconds(6),
+      voiceId: 'en_US-lessac-medium', sourceSignature: 'abcd1234', enabled: true,
+      musicGain: 0.25, speechGain: 1, createdAt: Date.now()
+    };
+    const file = buildProjectFile(project, [{
+      id: 'vo_asset', kind: 'audio', fileName: 'voiceover.wav', mimeType: 'audio/wav',
+      bytes: 128, contentHash: 'voice-hash', createdAt: project.voiceover.createdAt
+    }]);
+    const restored = validateProjectFile(JSON.parse(JSON.stringify(file)));
+    expect(restored.ok).toBe(true);
+    expect(file.assets.map((asset) => asset.id)).toContain('vo_asset');
+    expect(file.project.voiceover?.assetId).toBe('vo_asset');
   });
 });
 

@@ -387,6 +387,16 @@
 .ed-range { width: 100%; accent-color: var(--amber); }
 .ed-row { display: flex; align-items: center; gap: var(--sp-2); justify-content: space-between; }
 .ed-hint { font-size: 0.72rem; color: var(--text-faint); line-height: 1.5; }
+.ed-generation-section { gap: var(--sp-3); }
+.ed-generation-controls { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.ed-job-status { display: grid; gap: var(--sp-2); font-size: var(--step--1); color: var(--text-dim); }
+.ed-generation-error { color: var(--danger); font-size: var(--step--1); line-height: 1.5; }
+.ed-generated-lines { display: grid; gap: 4px; max-height: 150px; overflow: auto; padding: var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-1); }
+.ed-generated-line { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: var(--sp-2); font-size: var(--step--1); line-height: 1.4; }
+.ed-generated-line .mono { color: var(--text-faint); }
+.ed-voiceover-settings { display: grid; gap: var(--sp-3); }
+.ed-check-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--step--1); color: var(--text-dim); }
+.ed-check-row input { accent-color: var(--amber); }
 
 /* ---------- lyric list ---------- */
 

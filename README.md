@@ -1,4 +1,17 @@
 # BUILD PROMPT — Lyrics Video Studio
+
+## Current speech-model packaging (2026-10-08)
+
+The production `npm run build` creates a same-origin, versioned model pack alongside the app. It includes Whisper Tiny/Base and every Piper voice offered in the editor. The packer downloads the weights during the release build, verifies Piper files against upstream checksums, includes each voice's upstream `MODEL_CARD` plus the Whisper MIT notice, and splits files into 20 MiB chunks for static hosting. Large model binaries are generated under `apps/web/public/models/` and are intentionally ignored by Git.
+
+- `npm run bundle-models:dry-run` lists the model pack without downloading it.
+- `npm run build` downloads and packages the full model set; the build environment must be able to reach the upstream model hosts.
+- `npm run build:app-only` builds the UI without weights for fast local verification. It is not a deployable speech-model release; generation will report that the model pack is missing.
+- Expect roughly **0.85 GB** of weights before compression. The hosting provider must support the total static deployment and individual 20 MiB model chunks. Only the selected model is fetched from the app's own origin into local browser storage when used; inference remains in the browser.
+- If a later app release changes a model's checksum, VidLyrics asks before fetching that model's replacement. Declining keeps the prior cached copy when it is still available.
+
+Piper voice licences are individual. The pack includes each upstream model card; review those terms before redistribution or commercial use. Do not commit generated weights to Git.
+
 You are the principal engineer, product owner, and art director for a greenfield web application. Build it, verify it, and report honestly on what you verified.
 
 1. The product

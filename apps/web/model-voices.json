@@ -1,0 +1,12 @@
+[
+  { "id": "en_US-lessac-medium", "label": "English (US) · Lessac" },
+  { "id": "en_US-amy-medium", "label": "English (US) · Amy" },
+  { "id": "en_US-ryan-medium", "label": "English (US) · Ryan" },
+  { "id": "en_GB-alan-medium", "label": "English (UK) · Alan" },
+  { "id": "es_ES-davefx-medium", "label": "Spanish · DaveFX" },
+  { "id": "fr_FR-siwis-medium", "label": "French · Siwis" },
+  { "id": "de_DE-thorsten-medium", "label": "German · Thorsten" },
+  { "id": "pt_BR-faber-medium", "label": "Portuguese (Brazil) · Faber" },
+  { "id": "zh_CN-huayan-medium", "label": "Chinese · Huayan" },
+  { "id": "sw_CD-lanfrica-medium", "label": "Swahili · Lanfrica" }
+]

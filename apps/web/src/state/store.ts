@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type {
-  AppError, Design, ExportSettings, Line, Microseconds, Project, RenderState, SyncState
+  AppError, Design, ExportSettings, Line, Microseconds, Project, RenderState, SyncState, VoiceoverMeta
 } from '../core/types';
+import type { TranscriptCue } from '../core/lyrics/transcript';
 import { createProject, createLine, splitLine, mergeLines, newId, PROJECT_FORMAT_VERSION } from '../core/project/factory';
 import {
   applyBatch, applyCommand, createHistory, redo as redoHistory, undo as undoHistory,
@@ -55,12 +56,32 @@ export interface SyncStatus {
   error: AppError | null;
 }
 
+export type GenerationState = 'IDLE' | 'PREPARING' | 'DOWNLOADING' | 'LOADING' | 'RUNNING' | 'SAVING' | 'COMPLETE' | 'FAILED' | 'CANCELLED';
+
+export interface TranscriptionStatus {
+  state: GenerationState;
+  progress: number;
+  message: string;
+  error: string | null;
+  result: { cues: TranscriptCue[]; language: string | null } | null;
+}
+
+export interface VoiceoverJobStatus {
+  state: GenerationState;
+  progress: number;
+  message: string;
+  error: string | null;
+  available: boolean;
+}
+
 export interface EditorState {
   project: Project;
   history: HistoryState<Project>;
   media: MediaStatus;
   sync: SyncStatus;
   render: RenderStatus;
+  transcription: TranscriptionStatus;
+  voiceoverJob: VoiceoverJobStatus;
   peaks: PeakData | null;
   spectrum: SpectrumEnvelope | null;
   beatGrid: BeatGrid | null;
@@ -94,6 +115,7 @@ export interface EditorState {
 
   /* lyrics */
   setLyricsFromText: (text: string, source: Project['lyrics']['source'], fileName?: string | null) => void;
+  setLyricsFromTranscript: (cues: TranscriptCue[]) => void;
   updateLineText: (lineId: string, text: string) => void;
   deleteLines: (lineIds: string[]) => void;
   duplicateLines: (lineIds: string[]) => void;
@@ -120,6 +142,10 @@ export interface EditorState {
   setMedia: (patch: Partial<MediaStatus>) => void;
   setSync: (patch: Partial<SyncStatus>) => void;
   setRender: (patch: Partial<RenderStatus>) => void;
+  setTranscription: (patch: Partial<TranscriptionStatus>) => void;
+  setVoiceoverJob: (patch: Partial<VoiceoverJobStatus>) => void;
+  setAudioMissing: (missing: boolean) => void;
+  setVoiceoverMix: (patch: Partial<Pick<VoiceoverMeta, 'enabled' | 'musicGain' | 'speechGain'>>) => void;
   setAnalysis: (patch: { peaks?: PeakData | null; spectrum?: SpectrumEnvelope | null; beatGrid?: BeatGrid | null }) => void;
   setPlayhead: (timeUs: Microseconds) => void;
   setPlaying: (playing: boolean) => void;
@@ -155,6 +181,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   media: { state: 'IDLE', stage: 'idle', progress: 0, error: null },
   sync: { state: 'IDLE', progress: 0, message: '', error: null },
   render: { state: 'IDLE', progress: 0, framesDone: 0, framesTotal: 0, etaSeconds: 0, error: null, result: null },
+  transcription: { state: 'IDLE', progress: 0, message: '', error: null, result: null },
+  voiceoverJob: { state: 'IDLE', progress: 0, message: '', error: null, available: false },
   peaks: null,
   spectrum: null,
   beatGrid: null,
@@ -208,6 +236,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       project: createProject(options),
       history: createHistory<Project>(),
       media: { state: 'IDLE', stage: 'idle', progress: 0, error: null },
+      sync: { state: 'IDLE', progress: 0, message: '', error: null },
+      render: { state: 'IDLE', progress: 0, framesDone: 0, framesTotal: 0, etaSeconds: 0, error: null, result: null },
+      transcription: { state: 'IDLE', progress: 0, message: '', error: null, result: null },
+      audioMissing: false,
+      voiceoverJob: { state: 'IDLE', progress: 0, message: '', error: null, available: false },
       peaks: null,
       spectrum: null,
       beatGrid: null,
@@ -221,6 +254,14 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({
       project: { ...project, formatVersion: PROJECT_FORMAT_VERSION },
       history: createHistory<Project>(),
+      media: { state: 'IDLE', stage: 'idle', progress: 0, error: null },
+      sync: { state: 'IDLE', progress: 0, message: '', error: null },
+      render: { state: 'IDLE', progress: 0, framesDone: 0, framesTotal: 0, etaSeconds: 0, error: null, result: null },
+      transcription: { state: 'IDLE', progress: 0, message: '', error: null, result: null },
+      peaks: null,
+      spectrum: null,
+      beatGrid: null,
+      voiceoverJob: { state: 'IDLE', progress: 0, message: '', error: null, available: false },
       audioMissing: options?.audioMissing ?? false,
       playheadUs: project.ui.lastPlayheadUs,
       dirty: true
@@ -265,6 +306,52 @@ export const useEditor = create<EditorState>((set, get) => ({
     };
     const result = applyCommand(project, history, command);
     set({ project: result.state, history: result.history, dirty: true });
+  },
+
+  setLyricsFromTranscript: (cues) => {
+    const { project, history } = get();
+    const cleanCues = cues
+      .map((cue) => ({
+        text: normalizeDisplay(cue.text),
+        startUs: Math.max(0, Math.round(cue.startUs)),
+        endUs: Math.max(Math.max(0, Math.round(cue.startUs)), Math.round(cue.endUs))
+      }))
+      .filter((cue) => cue.text.length > 0);
+    if (cleanCues.length === 0) return;
+
+    const originalText = cleanCues.map((cue) => cue.text).join('\n');
+    const lines = cleanCues.map((cue) => createLine(cue.text, {
+      start: cue.startUs,
+      end: cue.endUs,
+      source: 'asr',
+      confidence: 0.65
+    }));
+    const structure = inferSections(lines);
+    for (const line of lines) line.sectionId = structure.assignment.get(line.id) ?? null;
+    const processed = postProcess(lines, {
+      durationUs: project.audio?.durationUs ?? null,
+      applyLeadIn: false,
+      minLineUs: usFromMs(250),
+      gapFillUs: usFromMs(150)
+    });
+    const before = project.lyrics;
+    const beforeSections = project.sections;
+    const command: Command<Project> = {
+      label: 'Apply generated subtitles',
+      apply: (p) => ({
+        ...p,
+        lyrics: { source: 'asr', originalText, originalFileName: null, lines: processed },
+        sections: structure.sections
+      }),
+      revert: (p) => ({ ...p, lyrics: before, sections: beforeSections })
+    };
+    const result = applyCommand(project, history, command);
+    set({
+      project: result.state,
+      history: result.history,
+      transcription: { ...get().transcription, result: null },
+      dirty: true
+    });
   },
 
   updateLineText: (lineId, text) => {
@@ -603,6 +690,24 @@ export const useEditor = create<EditorState>((set, get) => ({
   setMedia: (patch) => set((s) => ({ media: { ...s.media, ...patch } })),
   setSync: (patch) => set((s) => ({ sync: { ...s.sync, ...patch } })),
   setRender: (patch) => set((s) => ({ render: { ...s.render, ...patch } })),
+  setTranscription: (patch) => set((s) => ({ transcription: { ...s.transcription, ...patch } })),
+  setVoiceoverJob: (patch) => set((s) => ({ voiceoverJob: { ...s.voiceoverJob, ...patch } })),
+  setAudioMissing: (audioMissing) => set({ audioMissing }),
+  setVoiceoverMix: (patch) => {
+    const { project, history } = get();
+    if (!project.voiceover) return;
+    const before = project.voiceover;
+    const after: VoiceoverMeta = { ...before, ...patch };
+    const command: Command<Project> = {
+      label: 'Adjust voiceover mix',
+      coalesceKey: 'voiceover-mix',
+      apply: (p) => ({ ...p, voiceover: after }),
+      revert: (p) => ({ ...p, voiceover: before }),
+      merge: (previous) => ({ ...previous, apply: (p) => ({ ...p, voiceover: after }) })
+    };
+    const result = applyCommand(project, history, command);
+    set({ project: result.state, history: result.history, dirty: true });
+  },
   setAnalysis: (patch) =>
     set((s) => ({
       peaks: patch.peaks !== undefined ? patch.peaks : s.peaks,
