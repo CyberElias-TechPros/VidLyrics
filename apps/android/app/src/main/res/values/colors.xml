@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="editor_bg">#FF0B0D14</color>
+    <color name="ic_launcher_background">#FF101734</color>
+    <color name="brand_indigo">#FF6C63FF</color>
+    <color name="brand_gold">#FFFFD166</color>
+</resources>

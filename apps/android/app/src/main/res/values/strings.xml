@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VidLyrics</string>
+    <string name="app_tagline">Lyric videos, made on your phone</string>
+    <string name="new_project">New project</string>
+    <string name="import_audio">Add audio</string>
+    <string name="import_lyrics">Import lyrics</string>
+    <string name="paste_lyrics">Paste lyrics</string>
+    <string name="auto_sync">Auto-sync</string>
+    <string name="tap_sync">Tap-sync</string>
+    <string name="tap_here">Tap on each line</string>
+    <string name="render_video">Render video</string>
+    <string name="export_subtitles">Export subtitles</string>
+    <string name="preview">Preview</string>
+    <string name="timeline">Timeline</string>
+    <string name="lyrics">Lyrics</string>
+    <string name="design">Design</string>
+    <string name="export">Export</string>
+    <string name="settings">Settings</string>
+    <string name="guide">Guide</string>
+    <string name="undo">Undo</string>
+    <string name="redo">Redo</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="save">Save</string>
+    <string name="saved">Saved</string>
+    <string name="cancel">Cancel</string>
+    <string name="retry">Retry</string>
+    <string name="render_channel">Video renders</string>
+    <string name="render_in_progress">Rendering your lyric video</string>
+    <string name="render_complete">Render complete</string>
+    <string name="render_failed">Render failed</string>
+    <string name="notification_cancel">Stop render</string>
+    <string name="privacy_line">Everything stays on this device. No account, no upload, no internet permission.</string>
+</resources>
