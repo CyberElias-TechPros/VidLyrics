@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="file" path="projects" />
+    <!-- Decoded audio and cached analyses are recreated; never back them up. -->
+    <exclude domain="file" path="assets" />
+    <exclude domain="file" path="cache" />
+</full-backup-content>

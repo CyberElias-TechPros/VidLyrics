@@ -1,0 +1,14 @@
+# Gradle / Android build output
+.gradle/
+build/
+**/build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.keystore
+!gradle/wrapper/gradle-wrapper.jar
