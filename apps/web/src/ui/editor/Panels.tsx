@@ -1,15 +1,17 @@
 import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../state/store';
+import type { Line, SceneLayout, SceneTransition, VoiceoverMode } from '../../core/types';
+import type { ScriptSplitMode } from '../../core/lyrics/script';
 import { THEMES, ASPECTS, EXPORT_PRESETS, getExportPreset, exportSettingsFromPreset, validateExportSettings, estimateOutputBytes, estimateRender, formatBytes, getTheme } from '../../core/design/tokens';
 import { SUBTITLE_FORMATS } from '../../core/export/subtitles';
-import { formatClock, formatTimecode, usFromSeconds, usToSeconds } from '../../core/time';
+import { formatClock, formatTimecode, usToSeconds } from '../../core/time';
 import { detectInstrumentalRegions } from '../../core/timing/postprocess';
 import {
-  timelineDurationUs, exportSubtitle, exportProjectFile,
+  timelineDurationUs, exportSubtitle, exportProjectFile, exportVideoSpecFile, importImageAsset,
   transcribeAudio, cancelTranscription, applyGeneratedTranscript, dismissGeneratedTranscript,
-  generateVoiceover, cancelVoiceoverGeneration, downloadGeneratedVoiceover, removeGeneratedVoiceover
+  generateVoiceover, cancelVoiceoverGeneration, downloadGeneratedVoiceover, removeGeneratedVoiceover,
+  isVoiceoverCurrent, seekTo
 } from '../../media/session';
-import { voiceoverSourceSignature } from '../../core/audio/voiceover';
 import PIPER_VOICES from '../../../model-voices.json';
 
 /* ------------------------------ Lyrics ------------------------------ */
@@ -24,6 +26,18 @@ function isGenerationBusy(state: string): boolean {
   return ['PREPARING', 'DOWNLOADING', 'LOADING', 'RUNNING', 'SAVING'].includes(state);
 }
 
+const SCENE_LAYOUTS: { id: SceneLayout; label: string }[] = [
+  { id: 'caption', label: 'Caption / Lyric' },
+  { id: 'title', label: 'Title card' },
+  { id: 'stat', label: 'Hero stat' },
+  { id: 'bullets', label: 'Bullet list' },
+  { id: 'quote', label: 'Pull quote' },
+  { id: 'code', label: 'Code window' },
+  { id: 'chart', label: 'Bar chart' }
+];
+
+const SCENE_TRANSITIONS: SceneTransition[] = ['fade', 'slide', 'wipe', 'zoom', 'none'];
+
 export function LyricsPanel() {
   const lines = useEditor((s) => s.project.lyrics.lines);
   const sections = useEditor((s) => s.project.sections);
@@ -33,19 +47,38 @@ export function LyricsPanel() {
   const store = useEditor();
   const [query, setQuery] = useState('');
   const [pasteOpen, setPasteOpen] = useState(lines.length === 0);
+  const [composeMode, setComposeMode] = useState<'lyrics' | 'script'>(() =>
+    store.project.audio ? 'lyrics' : 'script'
+  );
+  const [splitMode, setSplitMode] = useState<ScriptSplitMode>('sentences');
+  const [scriptWpm, setScriptWpm] = useState(155);
   const [draft, setDraft] = useState('');
   const [whisperModel, setWhisperModel] = useState<'tiny' | 'base'>('tiny');
   const [transcriptionLanguage, setTranscriptionLanguage] = useState('auto');
   const [voiceChoice, setVoiceChoice] = useState<string | null>(null);
+  const [voiceChoiceB, setVoiceChoiceB] = useState<string | null>(null);
+  const [voiceModeChoice, setVoiceModeChoice] = useState<VoiceoverMode | null>(null);
+  const [pauseMs, setPauseMs] = useState<number>(() => store.project.voiceover?.pauseMs ?? 300);
+  const [sceneEditorOpen, setSceneEditorOpen] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const sceneImageInputRef = useRef<HTMLInputElement | null>(null);
   const transcription = store.transcription;
   const voiceoverJob = store.voiceoverJob;
   const voiceoverMeta = store.project.voiceover;
+  const hasAudioTrack = Boolean(store.project.audio);
+  const hasSpeakerB = useMemo(() => lines.some((l) => l.speaker === 'B'), [lines]);
   const selectedVoiceId = voiceChoice ?? voiceoverMeta?.voiceId ?? PIPER_VOICES[0]?.id ?? 'en_US-lessac-medium';
+  const selectedVoiceIdB = voiceChoiceB ?? voiceoverMeta?.voiceIdB ?? PIPER_VOICES[2]?.id ?? 'en_US-ryan-medium';
+  const effectiveVoiceMode: VoiceoverMode =
+    voiceModeChoice ?? voiceoverMeta?.mode ?? (hasAudioTrack ? 'timed' : 'sequential');
   const transcriptionBusy = isGenerationBusy(transcription.state);
   const voiceoverBusy = isGenerationBusy(voiceoverJob.state);
-  const voiceoverFresh = !!voiceoverMeta && voiceoverMeta.sourceSignature === voiceoverSourceSignature(lines);
+  const voiceoverFresh = isVoiceoverCurrent(store.project);
   const voiceoverAvailable = !!voiceoverMeta && voiceoverFresh && voiceoverJob.available;
+  const selectedLine: Line | null = useMemo(
+    () => lines.find((l) => l.id === selectedIds[0]) ?? null,
+    [lines, selectedIds]
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -66,27 +99,27 @@ export function LyricsPanel() {
     <>
       <div className="ed-panel-section">
         <div className="ed-row">
-          <span className="ed-panel-label">Lyrics</span>
+          <span className="ed-panel-label">Script &amp; lyrics</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-            {lines.length} lines
+            {lines.length} {lines.length === 1 ? 'scene' : 'scenes'}
           </span>
         </div>
         <input
           className="ed-input"
-          placeholder="Search lyrics…"
+          placeholder="Search scenes or lyrics…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search lyrics"
         />
         <div className="ed-row">
           <button className="btn btn-sm btn-ghost" onClick={() => setPasteOpen((v) => !v)} aria-expanded={pasteOpen}>
-            {pasteOpen ? 'Hide paste box' : 'Paste / replace lyrics'}
+            {pasteOpen ? 'Hide composer' : 'Paste script / lyrics'}
           </button>
           <button
             className="btn btn-sm btn-ghost"
             onClick={() => store.generateTimings()}
             disabled={lines.length === 0}
-            title="Estimate timings from lyric weight, then correct them"
+            title="Estimate timings from reading weight or song length"
           >
             Auto-timing
           </button>
@@ -95,29 +128,87 @@ export function LyricsPanel() {
 
       {pasteOpen ? (
         <div className="ed-panel-section">
+          <div className="ed-seg" role="group" aria-label="Composer mode">
+            <button
+              type="button"
+              className="ed-seg-btn"
+              aria-pressed={composeMode === 'script'}
+              onClick={() => setComposeMode('script')}
+            >
+              Script → Scenes
+            </button>
+            <button
+              type="button"
+              className="ed-seg-btn"
+              aria-pressed={composeMode === 'lyrics'}
+              onClick={() => setComposeMode('lyrics')}
+            >
+              Song Lyrics
+            </button>
+          </div>
           <label className="ed-panel-label" htmlFor="lyric-paste">
-            Paste lyrics or a subtitle file’s text
+            {composeMode === 'script' ? 'Paste a video script (no audio required)' : 'Paste lyrics or subtitle text'}
           </label>
           <textarea
             id="lyric-paste"
             className="ed-textarea"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={'One line per lyric.\nStructural tags like [Chorus] are read as sections.'}
+            placeholder={
+              composeMode === 'script'
+                ? '# Video Title\nOptional subtitle\n\nEach sentence becomes its own timed scene. Supports - bullet lists, > quotes, ```code``` fences, [Stat: 10x] callouts, and A: / B: dialogue.'
+                : 'One line per lyric.\nStructural tags like [Chorus] are read as sections.'
+            }
           />
-          <div className="ed-row">
+          {composeMode === 'script' ? (
+            <div className="ed-generation-controls">
+              <label className="ed-field">
+                <span className="ed-hint">Split by</span>
+                <select
+                  className="ed-select"
+                  value={splitMode}
+                  onChange={(e) => setSplitMode(e.target.value as ScriptSplitMode)}
+                >
+                  <option value="sentences">Sentences</option>
+                  <option value="lines">Lines</option>
+                  <option value="paragraphs">Paragraphs</option>
+                </select>
+              </label>
+              <label className="ed-field">
+                <span className="ed-hint">Pace (WPM)</span>
+                <input
+                  className="ed-input"
+                  type="number"
+                  min={80}
+                  max={280}
+                  step={5}
+                  value={scriptWpm}
+                  onChange={(e) => setScriptWpm(Number(e.target.value) || 155)}
+                />
+              </label>
+            </div>
+          ) : null}
+          <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
             <button
               className="btn btn-sm btn-primary"
               onClick={() => {
-                store.setLyricsFromText(draft, 'user');
+                if (composeMode === 'script') {
+                  store.setScenesFromScript(draft, { mode: splitMode, wordsPerMinute: scriptWpm, pauseMs });
+                } else {
+                  store.setLyricsFromText(draft, 'user');
+                }
                 setDraft('');
                 setPasteOpen(false);
               }}
               disabled={draft.trim().length === 0}
             >
-              Use these lyrics
+              {composeMode === 'script' ? 'Build scenes' : 'Use these lyrics'}
             </button>
-            <span className="ed-hint">Existing timings on unchanged lines are preserved.</span>
+            <span className="ed-hint">
+              {composeMode === 'script'
+                ? 'Ready to preview, sync local TTS, or export MP4.'
+                : 'Undoable with Ctrl/⌘ + Z.'}
+            </span>
           </div>
         </div>
       ) : null}
@@ -182,21 +273,70 @@ export function LyricsPanel() {
       </div>
 
       <div className="ed-panel-section ed-generation-section">
-        <span className="ed-panel-label">Text-to-speech voiceover</span>
-        <p className="ed-hint">Turn timed lyrics into speech locally. Piper voices ship with this app and are cached in your browser when selected; model updates require your approval.</p>
+        <span className="ed-panel-label">Local TTS voiceover &amp; sync</span>
+        <p className="ed-hint">
+          Piper voices run locally in your browser. In <strong>Auto-time scenes</strong> mode, each scene’s exact duration is set from its synthesized audio.
+        </p>
         <label className="ed-field">
-          <span className="ed-hint">Voice</span>
+          <span className="ed-hint">{hasSpeakerB ? 'Voice A (default / Speaker A)' : 'Voice'}</span>
           <select className="ed-select" value={selectedVoiceId} onChange={(event) => setVoiceChoice(event.target.value)}>
             {PIPER_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
           </select>
         </label>
+        {hasSpeakerB ? (
+          <label className="ed-field">
+            <span className="ed-hint">Voice B (Speaker B)</span>
+            <select className="ed-select" value={selectedVoiceIdB} onChange={(event) => setVoiceChoiceB(event.target.value)}>
+              {PIPER_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+            </select>
+          </label>
+        ) : null}
+        <div className="ed-generation-controls">
+          <label className="ed-field">
+            <span className="ed-hint">Timing mode</span>
+            <select
+              className="ed-select"
+              value={effectiveVoiceMode}
+              onChange={(event) => setVoiceModeChoice(event.target.value as VoiceoverMode)}
+            >
+              <option value="sequential">Auto-time scenes to speech</option>
+              <option value="timed">Speak at current cue times</option>
+            </select>
+          </label>
+          {effectiveVoiceMode === 'sequential' ? (
+            <label className="ed-field">
+              <span className="ed-hint">Pause (ms)</span>
+              <input
+                className="ed-input"
+                type="number"
+                min={0}
+                max={3000}
+                step={50}
+                value={pauseMs}
+                onChange={(e) => setPauseMs(Math.max(0, Math.min(3000, Number(e.target.value) || 0)))}
+              />
+            </label>
+          ) : null}
+        </div>
         <div className="ed-banner-actions">
           <button
             className="btn btn-sm btn-primary"
             disabled={lines.length === 0 || voiceoverBusy || transcriptionBusy}
-            onClick={() => void generateVoiceover(selectedVoiceId)}
+            onClick={() =>
+              void generateVoiceover(selectedVoiceId, {
+                mode: effectiveVoiceMode,
+                pauseMs,
+                voiceIdB: hasSpeakerB ? selectedVoiceIdB : null
+              })
+            }
           >
-            {voiceoverBusy ? 'Generating speech…' : voiceoverMeta ? 'Regenerate voiceover' : 'Generate voiceover'}
+            {voiceoverBusy
+              ? 'Generating speech…'
+              : effectiveVoiceMode === 'sequential'
+                ? 'Generate & sync speech'
+                : voiceoverMeta
+                  ? 'Regenerate voiceover'
+                  : 'Generate voiceover'}
           </button>
           {voiceoverBusy ? <button className="btn btn-sm btn-ghost" onClick={cancelVoiceoverGeneration}>Cancel</button> : null}
         </div>
@@ -213,17 +353,21 @@ export function LyricsPanel() {
             <div className="ed-banner" data-kind={voiceoverAvailable ? 'success' : 'error'}>
               <h3>{!voiceoverFresh ? 'Voiceover needs updating' : voiceoverJob.available ? 'Voiceover ready' : 'Voiceover audio missing'}</h3>
               <p>{voiceoverFresh
-                ? voiceoverJob.available ? `Generated with ${voiceoverMeta.voiceId}. Voice track spans ${voiceoverMeta.durationUs ? formatClock(voiceoverMeta.durationUs) : 'the lyric timeline'}.` : 'The voiceover audio is not in this browser. Reopen the project where it was generated or regenerate it.'
-                : 'Lyric text or timings changed since this voiceover was generated. Regenerate it before playback or export.'}</p>
+                ? voiceoverJob.available
+                  ? `Generated with ${voiceoverMeta.voiceId}${voiceoverMeta.voiceIdB ? ` + ${voiceoverMeta.voiceIdB}` : ''}. Spans ${voiceoverMeta.durationUs ? formatClock(voiceoverMeta.durationUs) : 'the timeline'}.`
+                  : 'The voiceover audio is not in this browser. Reopen the project where it was generated or regenerate it.'
+                : 'Scene text or timings changed since this voiceover was generated. Regenerate it before playback or export.'}</p>
             </div>
             <label className="ed-check-row">
               <input type="checkbox" checked={voiceoverMeta.enabled} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ enabled: event.target.checked })} />
               <span>Include voiceover in playback and video export</span>
             </label>
-            <label className="ed-field">
-              <span className="ed-row"><span className="ed-hint">Song volume</span><span className="mono">{Math.round(voiceoverMeta.musicGain * 100)}%</span></span>
-              <input className="ed-range" type="range" min="0" max="1.5" step="0.05" value={voiceoverMeta.musicGain} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ musicGain: Number(event.target.value) })} />
-            </label>
+            {hasAudioTrack ? (
+              <label className="ed-field">
+                <span className="ed-row"><span className="ed-hint">Background track</span><span className="mono">{Math.round(voiceoverMeta.musicGain * 100)}%</span></span>
+                <input className="ed-range" type="range" min="0" max="1.5" step="0.05" value={voiceoverMeta.musicGain} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ musicGain: Number(event.target.value) })} />
+              </label>
+            ) : null}
             <label className="ed-field">
               <span className="ed-row"><span className="ed-hint">Speech volume</span><span className="mono">{Math.round(voiceoverMeta.speechGain * 100)}%</span></span>
               <input className="ed-range" type="range" min="0" max="1.5" step="0.05" value={voiceoverMeta.speechGain} disabled={!voiceoverAvailable} onChange={(event) => store.setVoiceoverMix({ speechGain: Number(event.target.value) })} />
@@ -236,10 +380,157 @@ export function LyricsPanel() {
         ) : null}
       </div>
 
+      {selectedLine ? (
+        <div className="ed-panel-section">
+          <input
+            ref={sceneImageInputRef}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.currentTarget.value = '';
+              if (!file || !selectedLine) return;
+              const asset = await importImageAsset(file);
+              if (asset) {
+                store.setLineScene(selectedLine.id, {
+                  background: {
+                    ...(selectedLine.scene?.background ?? {}),
+                    kind: 'image',
+                    assetId: asset.id,
+                    motion: selectedLine.scene?.background?.motion ?? 0.25,
+                    scrim: selectedLine.scene?.background?.scrim ?? 0.42
+                  }
+                });
+                store.notify({ kind: 'success', title: 'Scene image attached', detail: asset.fileName });
+              }
+            }}
+          />
+          <div className="ed-row">
+            <span className="ed-panel-label">Selected scene</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              aria-expanded={sceneEditorOpen}
+              onClick={() => setSceneEditorOpen((v) => !v)}
+            >
+              {sceneEditorOpen ? 'Collapse' : `Layout: ${selectedLine.scene?.layout ?? 'caption'}`}
+            </button>
+          </div>
+          {sceneEditorOpen ? (
+            <div className="ed-field">
+              <div className="ed-generation-controls">
+                <label className="ed-field">
+                  <span className="ed-hint">Layout</span>
+                  <select
+                    className="ed-select"
+                    value={selectedLine.scene?.layout ?? 'caption'}
+                    onChange={(e) => store.setLineScene(selectedLine.id, { layout: e.target.value as SceneLayout })}
+                    aria-label="Scene layout"
+                  >
+                    {SCENE_LAYOUTS.map((l) => (
+                      <option key={l.id} value={l.id}>{l.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="ed-field">
+                  <span className="ed-hint">Speaker</span>
+                  <select
+                    className="ed-select"
+                    value={selectedLine.speaker ?? ''}
+                    onChange={(e) => store.setLineSpeaker(selectedLine.id, (e.target.value || null) as 'A' | 'B' | null)}
+                    aria-label="Scene speaker"
+                  >
+                    <option value="">Default (A)</option>
+                    <option value="A">Speaker A</option>
+                    <option value="B">Speaker B</option>
+                  </select>
+                </label>
+              </div>
+              <div className="ed-generation-controls">
+                <label className="ed-field">
+                  <span className="ed-hint">Transition</span>
+                  <select
+                    className="ed-select"
+                    value={selectedLine.scene?.transition ?? 'fade'}
+                    onChange={(e) => store.setLineScene(selectedLine.id, { transition: e.target.value as SceneTransition })}
+                    aria-label="Scene transition"
+                  >
+                    {SCENE_TRANSITIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="ed-field">
+                  <span className="ed-hint">Kicker / file</span>
+                  <input
+                    className="ed-input"
+                    value={selectedLine.scene?.kicker ?? ''}
+                    placeholder="e.g. STEP 01"
+                    onChange={(e) => store.setLineScene(selectedLine.id, { kicker: e.target.value })}
+                  />
+                </label>
+              </div>
+              {selectedLine.scene?.layout === 'stat' ? (
+                <label className="ed-field">
+                  <span className="ed-hint">Hero stat value</span>
+                  <input
+                    className="ed-input"
+                    value={selectedLine.scene?.value ?? ''}
+                    placeholder="e.g. 100%, $0, 10x"
+                    onChange={(e) => store.setLineScene(selectedLine.id, { value: e.target.value })}
+                  />
+                </label>
+              ) : null}
+              {selectedLine.scene?.layout === 'bullets' || selectedLine.scene?.layout === 'code' ? (
+                <label className="ed-field">
+                  <span className="ed-hint">
+                    {selectedLine.scene?.layout === 'code' ? 'Code lines (one per line)' : 'Bullet items (one per line)'}
+                  </span>
+                  <textarea
+                    className="ed-textarea mono"
+                    style={{ minHeight: 88, fontSize: '0.75rem' }}
+                    value={(selectedLine.scene?.items ?? []).join('\n')}
+                    onChange={(e) =>
+                      store.setLineScene(selectedLine.id, {
+                        items: e.target.value.split('\n').filter((l) => (selectedLine.scene?.layout === 'code' ? true : l.trim().length > 0))
+                      })
+                    }
+                  />
+                </label>
+              ) : null}
+              <label className="ed-field">
+                <span className="ed-hint">Subtext / attribution</span>
+                <input
+                  className="ed-input"
+                  value={selectedLine.scene?.subtext ?? ''}
+                  placeholder="Optional caption below headline"
+                  onChange={(e) => store.setLineScene(selectedLine.id, { subtext: e.target.value })}
+                />
+              </label>
+              <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => sceneImageInputRef.current?.click()}>
+                  {selectedLine.scene?.background?.kind === 'image' ? 'Replace scene image' : 'Set scene image'}
+                </button>
+                {selectedLine.scene?.background?.assetId ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => store.setLineScene(selectedLine.id, { background: undefined })}
+                  >
+                    Clear image
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {lines.length === 0 ? (
         <div className="ed-banner">
-          <h3>No lyrics yet</h3>
-          <p>Paste them above, or import a file with the button in the toolbar. Timing can be estimated afterwards and corrected by tapping.</p>
+          <h3>No scenes or lyrics yet</h3>
+          <p>Paste a script above, load a starter template in the <strong>Code</strong> tab, or import an audio/subtitle file.</p>
         </div>
       ) : null}
 
@@ -247,7 +538,7 @@ export function LyricsPanel() {
         {filtered.map((line) => {
           const conf =
             line.words.length === 0
-              ? line.source === 'human' || line.source === 'tap'
+              ? line.source === 'human' || line.source === 'tap' || line.source === 'tts'
                 ? 'high'
                 : 'low'
               : Math.min(...line.words.map((w) => w.confidence)) > 0.7
@@ -256,6 +547,11 @@ export function LyricsPanel() {
                   ? 'mid'
                   : 'low';
           const section = sections.find((s) => s.id === line.sectionId);
+          const metaTags = [
+            line.scene?.layout && line.scene.layout !== 'caption' ? line.scene.layout : null,
+            line.speaker ? `voice ${line.speaker}` : null,
+            section ? section.label : null
+          ].filter(Boolean);
           return (
             <div
               key={line.id}
@@ -263,16 +559,25 @@ export function LyricsPanel() {
               data-selected={selectedIds.includes(line.id) ? 'true' : 'false'}
               data-current={lines[currentIndex]?.id === line.id ? 'true' : 'false'}
             >
-              <span className="ed-line-time">
+              <button
+                type="button"
+                className="ed-line-time ed-line-time-btn"
+                title="Jump playhead to scene"
+                onClick={() => {
+                  store.setSelection([line.id]);
+                  const introUs = store.project.design.intro.enabled ? store.project.design.intro.durationUs : 0;
+                  seekTo(introUs + line.start + Math.min(350_000, Math.round((line.end - line.start) * 0.25)));
+                }}
+              >
                 {showHeat ? <i className="ed-conf-dot" data-conf={conf} style={{ display: 'inline-block', marginRight: 4 }} /> : null}
                 {formatClock(line.start)}
-              </span>
+              </button>
               <input
                 className="ed-line-text"
                 value={line.text}
                 onChange={(e) => store.updateLineText(line.id, e.target.value)}
                 onFocus={() => store.setSelection([line.id])}
-                aria-label={`Lyric line starting at ${formatClock(line.start)}`}
+                aria-label={`Scene starting at ${formatClock(line.start)}`}
               />
               <span className="ed-line-tools">
                 <button
@@ -284,7 +589,7 @@ export function LyricsPanel() {
                 >
                   {line.locked ? '🔒' : '🔓'}
                 </button>
-                <button className="ed-icon-btn" title="Split at cursor word" aria-label="Split line" onClick={() => store.splitLineAt(line.id, Math.max(1, Math.ceil(line.words.length / 2)))}>
+                <button className="ed-icon-btn" title="Split at midpoint" aria-label="Split line" onClick={() => store.splitLineAt(line.id, Math.max(1, Math.ceil(line.words.length / 2)))}>
                   ✂
                 </button>
                 <button className="ed-icon-btn" title="Duplicate" aria-label="Duplicate line" onClick={() => store.duplicateLines([line.id])}>
@@ -294,9 +599,9 @@ export function LyricsPanel() {
                   ✕
                 </button>
               </span>
-              {section ? (
-                <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)', gridColumn: '2 / 3' }}>
-                  {section.label}
+              {metaTags.length > 0 ? (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)', gridColumn: '2 / 3', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {metaTags.join(' · ')}
                 </span>
               ) : null}
             </div>
@@ -313,6 +618,7 @@ export function DesignPanel() {
   const design = useEditor((s) => s.project.design);
   const store = useEditor();
   const theme = getTheme(design.themeId);
+  const bgImageInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <>
@@ -422,8 +728,40 @@ export function DesignPanel() {
 
       <div className="ed-panel-section">
         <span className="ed-panel-label">Background</span>
+        <input
+          ref={bgImageInputRef}
+          type="file"
+          accept="image/*"
+          className="sr-only"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.currentTarget.value = '';
+            if (!file) return;
+            const asset = await importImageAsset(file);
+            if (asset) {
+              store.setDesign({
+                background: { ...design.background, kind: 'image', assetId: asset.id, scrim: Math.max(0.3, design.background.scrim) }
+              });
+              store.notify({ kind: 'success', title: 'Background image set', detail: asset.fileName });
+            }
+          }}
+        />
+        <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => bgImageInputRef.current?.click()}>
+            {design.background.kind === 'image' && design.background.assetId ? 'Replace image' : 'Choose image'}
+          </button>
+          {design.background.kind === 'image' ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => store.setDesign({ background: { ...theme.background } })}
+            >
+              Reset to theme
+            </button>
+          ) : null}
+        </div>
         <label className="ed-row">
-          <span className="ed-hint">Drift</span>
+          <span className="ed-hint">Drift / Ken Burns</span>
           <input className="ed-range" type="range" min={0} max={1} step={0.02} value={design.background.motion} onChange={(e) => store.setDesign({ background: { ...design.background, motion: Number(e.target.value) } })} />
         </label>
         <label className="ed-row">
@@ -440,7 +778,7 @@ export function DesignPanel() {
         <span className="ed-panel-label">Motion</span>
         <div className="ed-field">
           <select className="ed-select" value={design.motion.enter} onChange={(e) => store.setDesign({ motion: { ...design.motion, enter: e.target.value as typeof design.motion.enter } })} aria-label="Entrance">
-            {['fade', 'rise', 'clip', 'blur', 'none'].map((m) => (
+            {['spring', 'rise', 'fade', 'zoom', 'clip', 'blur', 'wordCascade', 'none'].map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
@@ -460,8 +798,18 @@ export function DesignPanel() {
         </label>
         {design.intro.enabled ? (
           <>
-            <input className="ed-input" value={design.intro.title} placeholder="Title" onChange={(e) => store.setDesign({ intro: { ...design.intro, title: e.target.value } })} aria-label="Intro title" />
-            <input className="ed-input" value={design.intro.subtitle} placeholder="Subtitle" onChange={(e) => store.setDesign({ intro: { ...design.intro, subtitle: e.target.value } })} aria-label="Intro subtitle" />
+            <input className="ed-input" value={design.intro.title} placeholder="Intro title" onChange={(e) => store.setDesign({ intro: { ...design.intro, title: e.target.value } })} aria-label="Intro title" />
+            <input className="ed-input" value={design.intro.subtitle} placeholder="Intro subtitle" onChange={(e) => store.setDesign({ intro: { ...design.intro, subtitle: e.target.value } })} aria-label="Intro subtitle" />
+          </>
+        ) : null}
+        <label className="ed-row">
+          <span className="ed-hint">Outro card</span>
+          <input type="checkbox" checked={design.outro.enabled} onChange={(e) => store.setDesign({ outro: { ...design.outro, enabled: e.target.checked } })} />
+        </label>
+        {design.outro.enabled ? (
+          <>
+            <input className="ed-input" value={design.outro.title} placeholder="Outro title" onChange={(e) => store.setDesign({ outro: { ...design.outro, title: e.target.value } })} aria-label="Outro title" />
+            <input className="ed-input" value={design.outro.subtitle} placeholder="Outro subtitle" onChange={(e) => store.setDesign({ outro: { ...design.outro, subtitle: e.target.value } })} aria-label="Outro subtitle" />
           </>
         ) : null}
       </div>
@@ -495,9 +843,26 @@ export function ExportPanel() {
   const store = useEditor();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const errors = validateExportSettings(project.export);
-  const bytes = estimateOutputBytes(project.export);
-  const plan = estimateRender(project.export);
+  const effectiveDuration = timelineDurationUs();
+  const effectiveExport = useMemo(
+    () => ({
+      ...project.export,
+      rangeEndUs: project.export.rangeEndUs > project.export.rangeStartUs ? project.export.rangeEndUs : effectiveDuration
+    }),
+    [project.export, effectiveDuration]
+  );
+  const errors = validateExportSettings(effectiveExport);
+  const bytes = estimateOutputBytes(effectiveExport);
+  const plan = estimateRender(effectiveExport);
+  const audioModeLabel = !project.export.includeAudio
+    ? 'Muted'
+    : project.audio && project.voiceover?.enabled && isVoiceoverCurrent(project)
+      ? 'Track + local TTS'
+      : project.audio
+        ? 'Imported track'
+        : project.voiceover?.enabled && isVoiceoverCurrent(project)
+          ? 'Local TTS voiceover'
+          : 'Silent (motion only)';
   const regions = useMemo(
     () => detectInstrumentalRegions(project.lyrics.lines, project.audio?.durationUs ?? 0),
     [project.lyrics.lines, project.audio?.durationUs]
@@ -514,7 +879,7 @@ export function ExportPanel() {
           value={project.export.presetId}
           onChange={(e) => {
             const preset = getExportPreset(e.target.value);
-            const duration = project.audio?.durationUs ?? usFromSeconds(180);
+            const duration = timelineDurationUs();
             store.setExport({
               ...exportSettingsFromPreset(preset.id, duration),
               fileName: project.export.fileName,
@@ -542,6 +907,8 @@ export function ExportPanel() {
           <dd className="mono" style={{ margin: 0 }}>{project.export.fps} fps</dd>
           <dt style={{ color: 'var(--text-faint)' }}>Frames</dt>
           <dd className="mono" style={{ margin: 0 }}>{plan.frames.toLocaleString()}</dd>
+          <dt style={{ color: 'var(--text-faint)' }}>Audio</dt>
+          <dd className="mono" style={{ margin: 0 }}>{audioModeLabel}</dd>
           <dt style={{ color: 'var(--text-faint)' }}>Est. size</dt>
           <dd className="mono" style={{ margin: 0 }}>{formatBytes(bytes)}</dd>
           <dt style={{ color: 'var(--text-faint)' }}>Est. time</dt>
@@ -620,7 +987,7 @@ export function ExportPanel() {
       ) : null}
 
       <div className="ed-panel-section">
-        <span className="ed-panel-label">Subtitles & project</span>
+        <span className="ed-panel-label">Subtitles, spec &amp; project</span>
         <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
           {SUBTITLE_FORMATS.map((f) => (
             <button key={f.id} className="btn btn-sm btn-ghost" title={f.description} onClick={() => exportSubtitle(f.id)}>
@@ -628,9 +995,14 @@ export function ExportPanel() {
             </button>
           ))}
         </div>
-        <button className="btn btn-sm btn-ghost" onClick={() => exportProjectFile()}>
-          Export project file
-        </button>
+        <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <button className="btn btn-sm btn-ghost" onClick={() => exportVideoSpecFile()} disabled={project.lyrics.lines.length === 0}>
+            Export spec (.json)
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => exportProjectFile()}>
+            Export project
+          </button>
+        </div>
       </div>
 
       {render.error ? (

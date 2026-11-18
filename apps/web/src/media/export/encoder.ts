@@ -302,7 +302,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
   report('PREPARING');
 
   try {
-    const sampleOffset = Math.max(0, Math.floor(((rangeStartUs - audioStartUs) / 1_000_000) * sampleRate));
+    const sampleOffset = Math.floor(((rangeStartUs - audioStartUs) / 1_000_000) * sampleRate);
     const audioFramesTotal = Math.floor((durationUs / 1_000_000) * sampleRate);
     // Audio is emitted in ~50 ms blocks. Small blocks keep the muxer's
     // interleaving tight, which is what keeps long exports in sync.

@@ -8,22 +8,45 @@ import piperWasmUrl from '@diffusionstudio/piper-wasm/build/piper_phonemize.wasm
 import onnxSimdWasmUrl from '../../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm?url';
 import onnxThreadedSimdWasmUrl from '../../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
 import { decodeWav } from '../../core/audio/wav';
+import { resampleMono } from '../../core/audio/resample';
+import { stitchSequentialVoiceClips, type SequentialClipInput } from '../../core/audio/voiceover';
 
 interface VoiceLine {
+  id: string;
   text: string;
   startUs: number;
+  speaker?: 'A' | 'B' | null;
 }
 
 type IncomingMessage =
-  | { type: 'SPEAK'; id: string; voiceId: string; lines: VoiceLine[]; durationUs: number; modelBundle: SelectedPiperModel }
+  | {
+      type: 'SPEAK';
+      id: string;
+      voiceId: string;
+      voiceIdB?: string | null;
+      mode?: 'timed' | 'sequential';
+      pauseUs?: number;
+      lines: VoiceLine[];
+      durationUs: number;
+      modelBundle: SelectedPiperModel;
+      modelBundleB?: SelectedPiperModel | null;
+    }
   | { type: 'CANCEL'; id: string };
 
 type OutgoingMessage =
   | { type: 'STATUS'; id: string; state: 'PREPARING' | 'DOWNLOADING' | 'SYNTHESIZING'; message: string }
   | { type: 'MODEL_PROGRESS'; id: string; loaded: number; total: number }
-  | { type: 'MODEL_READY'; id: string; version: string; url: string; bundleId: string; bytes: number }
+  | { type: 'MODEL_READY'; id: string; voiceId: string; version: string; url: string; bundleId: string; bytes: number }
   | { type: 'LINE_PROGRESS'; id: string; completed: number; total: number }
-  | { type: 'RESULT'; id: string; pcm: Float32Array; sampleRate: number; durationUs: number; lineCount: number }
+  | {
+      type: 'RESULT';
+      id: string;
+      pcm: Float32Array;
+      sampleRate: number;
+      durationUs: number;
+      lineCount: number;
+      cues?: { lineId: string; startUs: number; endUs: number }[];
+    }
   | { type: 'ERROR'; id: string; message: string }
   | { type: 'CANCELLED'; id: string };
 
@@ -144,6 +167,71 @@ function installBundledPiperFetch(modelBundle: SelectedPiperModel): () => void {
   return () => { globalThis.fetch = originalFetch; };
 }
 
+async function loadPiperSession(
+  jobId: string,
+  voiceId: string,
+  modelBundle: SelectedPiperModel
+): Promise<Awaited<ReturnType<typeof TtsSession.create>>> {
+  const voiceAlreadyStored = await hasCompleteStoredVoice(voiceId);
+  if (!modelBundle.allowFetch && !voiceAlreadyStored) {
+    throw new Error('The previous Piper voice copy is no longer available in browser storage. Approve the bundled model update to restore it.');
+  }
+  let backup: PiperBackup | null = null;
+  if (modelBundle.updateAccepted && voiceAlreadyStored && modelBundle.previousVersion) {
+    backup = await backupStoredVoice(voiceId, modelBundle.previousVersion);
+    if (!backup) throw new Error('Could not safely stage the existing voice model for update. Free some browser storage and try again.');
+    await removeStoredVoice(voiceId);
+  }
+
+  const wasmPaths = {
+    // ONNX Runtime accepts a filename-to-URL map. Keep both threaded and
+    // single-thread SIMD binaries same-origin so Piper never falls back to a CDN.
+    onnxWasm: {
+      'ort-wasm-simd-threaded.wasm': onnxThreadedSimdWasmUrl,
+      'ort-wasm-simd.wasm': onnxSimdWasmUrl
+    } as unknown as string,
+    piperData: piperDataUrl,
+    piperWasm: piperWasmUrl
+  };
+  const restoreFetch = installBundledPiperFetch(modelBundle);
+  let session: Awaited<ReturnType<typeof TtsSession.create>>;
+  try {
+    session = await TtsSession.create({
+      voiceId,
+      wasmPaths,
+      progress: (progress) => {
+        if (progress.url.startsWith('tts://')) return;
+        if (progress.total > 0) {
+          send({ type: 'STATUS', id: jobId, state: 'DOWNLOADING', message: `Loading bundled voice ${voiceId}…` });
+        }
+        send({ type: 'MODEL_PROGRESS', id: jobId, loaded: progress.loaded, total: progress.total });
+      }
+    });
+  } catch (error) {
+    if (backup) await restoreStoredVoice(voiceId, backup).catch(() => undefined);
+    backup = null;
+    throw error;
+  } finally {
+    restoreFetch();
+  }
+  if (backup) {
+    await removeVoiceBackup(backup);
+    backup = null;
+  }
+  if (modelBundle.allowFetch) {
+    send({
+      type: 'MODEL_READY',
+      id: jobId,
+      voiceId,
+      version: modelBundle.version,
+      url: modelBundle.onnx.url,
+      bundleId: modelBundle.bundleId,
+      bytes: modelBundle.bytes
+    });
+  }
+  return session;
+}
+
 async function runSpeech(message: Extract<IncomingMessage, { type: 'SPEAK' }>): Promise<void> {
   activeId = message.id;
   cancelled = false;
@@ -151,86 +239,88 @@ async function runSpeech(message: Extract<IncomingMessage, { type: 'SPEAK' }>): 
     if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
       throw new Error('This browser does not support local voice-model storage. Use a current browser with site storage enabled.');
     }
-    if (message.lines.length === 0) throw new Error('There are no timed lyric lines to speak.');
+    if (message.lines.length === 0) throw new Error('There are no script or lyric lines to speak.');
 
     send({ type: 'STATUS', id: message.id, state: 'PREPARING', message: 'Loading the bundled local speech engine…' });
-    const voiceAlreadyStored = await hasCompleteStoredVoice(message.voiceId);
-    if (!message.modelBundle.allowFetch && !voiceAlreadyStored) {
-      throw new Error('The previous Piper voice copy is no longer available in browser storage. Approve the bundled model update to restore it.');
-    }
-    let backup: PiperBackup | null = null;
-    if (message.modelBundle.updateAccepted && voiceAlreadyStored && message.modelBundle.previousVersion) {
-      backup = await backupStoredVoice(message.voiceId, message.modelBundle.previousVersion);
-      if (!backup) throw new Error('Could not safely stage the existing voice model for update. Free some browser storage and try again.');
-      await removeStoredVoice(message.voiceId);
-    }
+    const sessionA = await loadPiperSession(message.id, message.voiceId, message.modelBundle);
+    if (cancelled) throw new DOMException('Cancelled', 'AbortError');
 
-    const wasmPaths = {
-      // ONNX Runtime accepts a filename-to-URL map. Keep both threaded and
-      // single-thread SIMD binaries same-origin so Piper never falls back to a CDN.
-      onnxWasm: {
-        'ort-wasm-simd-threaded.wasm': onnxThreadedSimdWasmUrl,
-        'ort-wasm-simd.wasm': onnxSimdWasmUrl
-      } as unknown as string,
-      piperData: piperDataUrl,
-      piperWasm: piperWasmUrl
-    };
-    const restoreFetch = installBundledPiperFetch(message.modelBundle);
-    let session: Awaited<ReturnType<typeof TtsSession.create>>;
-    try {
-      session = await TtsSession.create({
-        voiceId: message.voiceId,
-        wasmPaths,
-        progress: (progress) => {
-          if (progress.url.startsWith('tts://')) return;
-          if (progress.total > 0) {
-            send({ type: 'STATUS', id: message.id, state: 'DOWNLOADING', message: 'Loading the bundled voice model from VidLyrics…' });
-          }
-          send({ type: 'MODEL_PROGRESS', id: message.id, loaded: progress.loaded, total: progress.total });
-        }
-      });
-    } catch (error) {
-      if (backup) await restoreStoredVoice(message.voiceId, backup).catch(() => undefined);
-      backup = null;
-      throw error;
-    } finally {
-      restoreFetch();
-    }
-    if (backup) {
-      await removeVoiceBackup(backup);
-      backup = null;
-    }
-    if (message.modelBundle.allowFetch) {
-      send({
-        type: 'MODEL_READY', id: message.id, version: message.modelBundle.version,
-        url: message.modelBundle.onnx.url, bundleId: message.modelBundle.bundleId,
-        bytes: message.modelBundle.bytes
-      });
-    }
+    const needsSecondVoice =
+      !!message.voiceIdB &&
+      message.voiceIdB !== message.voiceId &&
+      !!message.modelBundleB &&
+      message.lines.some((line) => line.speaker === 'B' && line.text.trim().length > 0);
+    const sessionB = needsSecondVoice && message.voiceIdB && message.modelBundleB
+      ? await loadPiperSession(message.id, message.voiceIdB, message.modelBundleB)
+      : null;
     if (cancelled) throw new DOMException('Cancelled', 'AbortError');
 
     const lines = message.lines.filter((line) => line.text.trim().length > 0);
-    if (lines.length === 0) throw new Error('There are no readable lyric lines to speak.');
-    send({ type: 'STATUS', id: message.id, state: 'SYNTHESIZING', message: `Generating speech for ${lines.length} lines…` });
+    if (lines.length === 0) throw new Error('There are no readable script or lyric lines to speak.');
+    const mode = message.mode ?? 'timed';
+    send({
+      type: 'STATUS',
+      id: message.id,
+      state: 'SYNTHESIZING',
+      message: mode === 'sequential'
+        ? `Synthesizing & timing ${lines.length} scenes…`
+        : `Generating speech for ${lines.length} lines…`
+    });
+
+    if (mode === 'sequential') {
+      let sampleRate = 0;
+      const clips: SequentialClipInput[] = [];
+      for (let index = 0; index < lines.length; index += 1) {
+        if (cancelled) throw new DOMException('Cancelled', 'AbortError');
+        const line = lines[index];
+        if (!line) continue;
+        const activeSession = line.speaker === 'B' && sessionB ? sessionB : sessionA;
+        const wavBlob = await activeSession.predict(line.text);
+        const wav = decodeWav(await wavBlob.arrayBuffer());
+        const rawMono = toMono(wav.samples, wav.channels);
+        if (sampleRate === 0) sampleRate = wav.sampleRate;
+        const mono = wav.sampleRate === sampleRate ? rawMono : resampleMono(rawMono, wav.sampleRate, sampleRate);
+        clips.push({ lineId: line.id, samples: mono });
+        send({ type: 'LINE_PROGRESS', id: message.id, completed: index + 1, total: lines.length });
+      }
+      if (cancelled) throw new DOMException('Cancelled', 'AbortError');
+      const stitched = stitchSequentialVoiceClips(clips, sampleRate || 22_050, {
+        pauseUs: Math.max(0, message.pauseUs ?? 300_000)
+      });
+      send(
+        {
+          type: 'RESULT',
+          id: message.id,
+          pcm: stitched.pcm,
+          sampleRate: stitched.sampleRate,
+          durationUs: stitched.durationUs,
+          lineCount: lines.length,
+          cues: stitched.cues
+        },
+        [stitched.pcm.buffer]
+      );
+      return;
+    }
 
     let sampleRate = 0;
     let maxFrames = 0;
     let track: Float32Array<ArrayBufferLike> = new Float32Array(0);
+    const timedCues: { lineId: string; startUs: number; endUs: number }[] = [];
 
     for (let index = 0; index < lines.length; index += 1) {
       if (cancelled) throw new DOMException('Cancelled', 'AbortError');
       const line = lines[index];
       if (!line) continue;
-      const wavBlob = await session.predict(line.text);
+      const activeSession = line.speaker === 'B' && sessionB ? sessionB : sessionA;
+      const wavBlob = await activeSession.predict(line.text);
       const wav = decodeWav(await wavBlob.arrayBuffer());
+      const rawMono = toMono(wav.samples, wav.channels);
       if (sampleRate === 0) {
         sampleRate = wav.sampleRate;
         maxFrames = Math.max(0, Math.ceil((Math.max(0, message.durationUs) * sampleRate) / 1_000_000));
         track = new Float32Array(maxFrames);
-      } else if (wav.sampleRate !== sampleRate) {
-        throw new Error('The selected voice returned inconsistent sample rates.');
       }
-      const mono = toMono(wav.samples, wav.channels);
+      const mono = wav.sampleRate === sampleRate ? rawMono : resampleMono(rawMono, wav.sampleRate, sampleRate);
       const startFrame = Math.max(0, Math.round((Math.max(0, line.startUs) * sampleRate) / 1_000_000));
       const endFrame = startFrame + mono.length;
       track = ensureCapacity(track, endFrame);
@@ -238,6 +328,11 @@ async function runSpeech(message: Extract<IncomingMessage, { type: 'SPEAK' }>): 
       for (let sample = 0; sample < mono.length; sample += 1) {
         track[startFrame + sample] = (track[startFrame + sample] ?? 0) + (mono[sample] ?? 0);
       }
+      timedCues.push({
+        lineId: line.id,
+        startUs: Math.round((startFrame / sampleRate) * 1_000_000),
+        endUs: Math.round((endFrame / sampleRate) * 1_000_000)
+      });
       send({ type: 'LINE_PROGRESS', id: message.id, completed: index + 1, total: lines.length });
     }
 
@@ -252,7 +347,8 @@ async function runSpeech(message: Extract<IncomingMessage, { type: 'SPEAK' }>): 
       pcm,
       sampleRate,
       durationUs: Math.round((pcm.length / sampleRate) * 1_000_000),
-      lineCount: lines.length
+      lineCount: lines.length,
+      cues: timedCues
     }, [pcm.buffer]);
   } catch (error) {
     if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) {
