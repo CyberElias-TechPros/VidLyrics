@@ -1,20 +1,24 @@
-import type { AssetRecord, Line, Project, VoiceoverMeta } from '../core/types';
-import { usFromSeconds } from '../core/time';
+import type { AssetRecord, Line, Project, VoiceoverMeta, VoiceoverMode } from '../core/types';
+import { usFromMs, usFromSeconds } from '../core/time';
 import { decodeWav } from '../core/audio/wav';
-import { mixVoiceover, voiceoverSourceSignature } from '../core/audio/voiceover';
+import { mixVoiceover, renderStandaloneVoiceover, voiceoverSourceSignature } from '../core/audio/voiceover';
 import { whisperSegmentsToCues, untimedTranscriptCue } from '../core/lyrics/transcript';
+import { applyMeasuredVoiceoverCues, spokenTextForScene } from '../core/lyrics/script';
 import { isInstrumentalMarker } from '../core/lyrics/normalize';
 import { appError, type ErrorCode } from '../core/errors';
-import { sha256Hex, sanitizeFileName, validateAudioFile, validateAudioDuration, extensionOf, MAX_AUDIO_BYTES } from '../core/validation/files';
+import { sha256Hex, sanitizeFileName, validateAudioFile, validateAudioDuration, extensionOf, MAX_AUDIO_BYTES, IMAGE_EXTENSIONS } from '../core/validation/files';
 import { decodeAudioFile, DecodeError } from './audio/decode';
 import { PlaybackEngine } from './audio/player';
 import { exportVideo, downloadBlob, isExportSupported, checkAudioEncoderSupport, encodeWav, ExportError } from './export/encoder';
 import { createMeasureFn } from './canvasMeasurer';
 import { buildScene } from '../core/render/scene';
 import { detectBeatGrid } from '../core/audio/beats';
-import { serialisePeaks, deserialisePeaks, type PeakData } from '../core/audio/peaks';
+import { computePeaks, serialisePeaks, deserialisePeaks, type PeakData } from '../core/audio/peaks';
+import { computeSpectrum } from '../core/audio/spectrum';
 import { newId } from '../core/project/factory';
 import { loadProjectJson, ProjectFormatError } from '../core/project/migrate';
+import { isVideoSpecJson, parseVideoSpecJson } from '../core/spec/schema';
+import { serialiseVideoSpec } from '../core/spec/compiler';
 import { buildProjectFile, serialiseProjectFile, suggestedFileName, serialiseSubtitle, type SubtitleFormat } from '../core/export/subtitles';
 import { saveProject, saveAsset, getAssetPayload, loadProject, listAssets } from '../storage/projectRepo';
 import { estimateStorage, StorageQuotaError } from '../storage/idb';
@@ -37,6 +41,8 @@ import {
 let engine: PlaybackEngine | null = null;
 let decoded: { pcm: Float32Array; interleaved: Float32Array; sampleRate: number; channels: number; durationUs: number } | null = null;
 let voiceoverAudio: { pcm: Float32Array; sampleRate: number; assetId: string } | null = null;
+const sceneImages = new Map<string, CanvasImageSource>();
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 let importController: AbortController | null = null;
 let exportController: AbortController | null = null;
 let projectEpoch = 0;
@@ -77,6 +83,7 @@ interface WhisperWorkerMessage {
 interface VoiceoverWorkerMessage {
   type: 'STATUS' | 'MODEL_PROGRESS' | 'MODEL_READY' | 'LINE_PROGRESS' | 'RESULT' | 'ERROR' | 'CANCELLED';
   id: string;
+  voiceId?: string;
   version?: string;
   url?: string;
   bundleId?: string;
@@ -90,6 +97,7 @@ interface VoiceoverWorkerMessage {
   sampleRate?: number;
   durationUs?: number;
   lineCount?: number;
+  cues?: { lineId: string; startUs: number; endUs: number }[];
 }
 
 function stopActiveGeneration(markCancelled = true): void {
@@ -118,8 +126,16 @@ export function getDecodedAudio(): { pcm: Float32Array; interleaved: Float32Arra
   return decoded;
 }
 
-function isVoiceoverCurrent(project: Project): boolean {
-  return !!project.voiceover && project.voiceover.sourceSignature === voiceoverSourceSignature(project.lyrics.lines);
+export function getSceneImages(): Map<string, CanvasImageSource> {
+  return sceneImages;
+}
+
+export function isVoiceoverCurrent(project: Project): boolean {
+  if (!project.voiceover) return false;
+  return (
+    project.voiceover.sourceSignature ===
+    voiceoverSourceSignature(project.lyrics.lines, { voiceIdB: project.voiceover.voiceIdB ?? null })
+  );
 }
 
 function voiceoverTimelineOffsetUs(project: Project): number {
@@ -127,9 +143,9 @@ function voiceoverTimelineOffsetUs(project: Project): number {
 }
 
 function syncVoiceoverPlayback(): void {
-  if (!engine || !decoded) return;
+  if (!engine) return;
   const project = useEditor.getState().project;
-  if (!project.audio) return;
+  engine.setVirtualDuration(timelineDurationUs());
   const meta = project.voiceover;
   const loaded = voiceoverAudio;
   const current = !!meta && isVoiceoverCurrent(project) && loaded?.assetId === meta.assetId;
@@ -148,9 +164,130 @@ function syncVoiceoverPlayback(): void {
   engine.setVoiceoverMix({
     enabled: meta.enabled,
     timelineOffsetUs: voiceoverTimelineOffsetUs(project),
-    musicGain: meta.musicGain,
+    musicGain: project.audio ? meta.musicGain : 0,
     speechGain: meta.speechGain
   });
+}
+
+async function analyseStandaloneVoiceover(pcm: Float32Array, sampleRate: number, expectedProjectId: string, expectedEpoch: number): Promise<void> {
+  try {
+    const peaks = await computePeaks(pcm, sampleRate, 1);
+    if (projectEpoch !== expectedEpoch || useEditor.getState().project.id !== expectedProjectId) return;
+    if (useEditor.getState().project.audio) return;
+    const spectrum = await computeSpectrum(pcm, sampleRate);
+    if (projectEpoch !== expectedEpoch || useEditor.getState().project.id !== expectedProjectId) return;
+    if (useEditor.getState().project.audio) return;
+    useEditor.getState().setAnalysis({ peaks, spectrum, beatGrid: null });
+  } catch {
+    /* non-fatal: timeline falls back to scene blocks without waveform */
+  }
+}
+
+async function decodeImageBlob(blob: Blob): Promise<CanvasImageSource> {
+  if (typeof createImageBitmap === 'function') {
+    return await createImageBitmap(blob);
+  }
+  return await new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not decode that image file.'));
+    };
+    img.src = url;
+  });
+}
+
+function disposeSceneImages(): void {
+  for (const img of sceneImages.values()) {
+    if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) {
+      try {
+        img.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  sceneImages.clear();
+}
+
+function collectProjectImageIds(project: Project): string[] {
+  const ids = new Set<string>();
+  if (project.design.background.assetId) ids.add(project.design.background.assetId);
+  if (project.design.brand.logoAssetId) ids.add(project.design.brand.logoAssetId);
+  for (const line of project.lyrics.lines) {
+    if (line.scene?.background?.assetId) ids.add(line.scene.background.assetId);
+  }
+  return [...ids];
+}
+
+export async function hydrateImagesFromStorage(): Promise<void> {
+  const store = useEditor.getState();
+  const projectId = store.project.id;
+  const epoch = projectEpoch;
+  const needed = collectProjectImageIds(store.project).filter((id) => !sceneImages.has(id));
+  if (needed.length === 0) return;
+
+  let loadedAny = false;
+  for (const id of needed) {
+    try {
+      const payload = await getAssetPayload(id);
+      if (epoch !== projectEpoch || useEditor.getState().project.id !== projectId) return;
+      if (!payload) continue;
+      const blob = payload instanceof Blob ? payload : new Blob([payload]);
+      const source = await decodeImageBlob(blob);
+      if (epoch !== projectEpoch || useEditor.getState().project.id !== projectId) return;
+      sceneImages.set(id, source);
+      loadedAny = true;
+    } catch {
+      /* missing/corrupt image falls back cleanly to gradient in renderer */
+    }
+  }
+  if (loadedAny) useEditor.getState().bumpImageAssets();
+}
+
+/** Import a local background image (global or per-scene) into IndexedDB and the renderer cache. */
+export async function importImageAsset(file: File): Promise<AssetRecord | null> {
+  const store = useEditor.getState();
+  const ext = extensionOf(file.name);
+  if (!file.type.startsWith('image/') && !IMAGE_EXTENSIONS.includes(ext)) {
+    store.notify({ kind: 'error', title: 'Unsupported image', detail: 'Choose a PNG, JPEG, WebP, AVIF or GIF image.' });
+    return null;
+  }
+  if (file.size === 0 || file.size > MAX_IMAGE_BYTES) {
+    store.notify({ kind: 'error', title: 'Image size out of range', detail: 'Choose an image smaller than 25 MB.' });
+    return null;
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    const contentHash = await sha256Hex(buffer);
+    const blob = new Blob([buffer], { type: file.type || 'image/png' });
+    const bitmap = await decodeImageBlob(blob);
+    const record: AssetRecord = {
+      id: `img_${contentHash.slice(0, 24)}`,
+      kind: 'image',
+      fileName: sanitizeFileName(file.name, 'background.png'),
+      mimeType: file.type || 'image/png',
+      bytes: file.size,
+      contentHash,
+      createdAt: Date.now()
+    };
+    const saved = await saveAsset(record, blob);
+    sceneImages.set(saved.id, bitmap);
+    store.bumpImageAssets();
+    return saved;
+  } catch (error) {
+    store.notify({
+      kind: 'error',
+      title: 'Could not import image',
+      detail: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 }
 
 let engineVoiceoverAssetId: string | null = null;
@@ -178,6 +315,7 @@ function resetProjectRuntime(): void {
   decoded = null;
   voiceoverAudio = null;
   engineVoiceoverAssetId = null;
+  disposeSceneImages();
 }
 
 useEditor.subscribe((state, previous) => {
@@ -718,6 +856,9 @@ export async function hydrateVoiceoverFromStorage(): Promise<boolean> {
     engineVoiceoverAssetId = null;
     store.setVoiceoverJob({ state: 'COMPLETE', progress: 1, message: 'Generated voiceover is available locally.', error: null, available: true });
     syncVoiceoverPlayback();
+    if (!useEditor.getState().project.audio) {
+      void analyseStandaloneVoiceover(mono, wav.sampleRate, projectId, runtimeEpoch);
+    }
     return true;
   } catch (error) {
     if (!isCurrentVoiceover()) return false;
@@ -727,8 +868,17 @@ export async function hydrateVoiceoverFromStorage(): Promise<boolean> {
   }
 }
 
-/** Synthesize the timed lyric lines as one locally stored voiceover track. */
-export async function generateVoiceover(voiceId: string): Promise<void> {
+export interface GenerateVoiceoverOptions {
+  /** `'sequential'` times each visual scene directly from its synthesized audio duration. */
+  mode?: VoiceoverMode;
+  /** Pause between consecutive scenes in milliseconds when `mode === 'sequential'`. */
+  pauseMs?: number;
+  /** Optional second Piper voice for lines assigned to Speaker 'B'. */
+  voiceIdB?: string | null;
+}
+
+/** Synthesize script scenes or timed lyrics as one locally stored voiceover track. */
+export async function generateVoiceover(voiceId: string, options: GenerateVoiceoverOptions = {}): Promise<void> {
   const store = useEditor.getState();
   const token = reserveGenerationStart();
   if (!token) {
@@ -736,33 +886,45 @@ export async function generateVoiceover(voiceId: string): Promise<void> {
     return;
   }
   try {
-    await runVoiceoverGeneration(voiceId);
+    await runVoiceoverGeneration(voiceId, options);
   } finally {
     releaseGenerationStart(token);
   }
 }
 
-async function runVoiceoverGeneration(voiceId: string): Promise<void> {
+async function runVoiceoverGeneration(voiceId: string, options: GenerateVoiceoverOptions = {}): Promise<void> {
   const store = useEditor.getState();
   if (generationWorker) {
     store.notify({ kind: 'warning', title: 'A generation task is already running', detail: 'Wait for it to finish or cancel it first.' });
     return;
   }
   const project = store.project;
-  const lines = project.lyrics.lines
-    .filter((line) => line.text.trim().length > 0 && !isInstrumentalMarker(line.text))
-    .map((line) => ({ text: line.text, startUs: Math.max(0, line.start) }));
+  const mode: VoiceoverMode = options.mode ?? (project.audio ? 'timed' : 'sequential');
+  const pauseMs = Math.max(0, Math.min(5000, Math.round(options.pauseMs ?? 300)));
+  const rawLines = project.lyrics.lines.filter((line) => line.text.trim().length > 0 && !isInstrumentalMarker(line.text));
+  const lines = rawLines.map((line) => ({
+    id: line.id,
+    text: line.scene ? spokenTextForScene(line) : line.text,
+    startUs: Math.max(0, line.start),
+    speaker: line.speaker
+  }));
   if (lines.length === 0) {
-    store.setVoiceoverJob({ state: 'FAILED', progress: 0, message: 'Add readable lyric lines before generating speech.', error: 'There are no lines to speak.' });
+    store.setVoiceoverJob({ state: 'FAILED', progress: 0, message: 'Add readable script or lyric lines before generating speech.', error: 'There are no lines to speak.' });
     return;
   }
+  const hasSpeakerB = lines.some((l) => l.speaker === 'B');
+  const voiceIdB = hasSpeakerB && options.voiceIdB && options.voiceIdB !== voiceId ? options.voiceIdB : null;
   const projectId = project.id;
   const generationEpoch = projectEpoch;
-  const sourceSignature = voiceoverSourceSignature(project.lyrics.lines);
+  const sourceSignature = voiceoverSourceSignature(project.lyrics.lines, { voiceIdB });
   const durationUs = Math.max(project.audio?.durationUs ?? 0, ...project.lyrics.lines.map((line) => line.end));
   let modelBundle: SelectedPiperModel;
+  let modelBundleB: SelectedPiperModel | null = null;
   try {
     modelBundle = await selectBundledPiperModel(voiceId);
+    if (voiceIdB) {
+      modelBundleB = await selectBundledPiperModel(voiceIdB);
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const current = useEditor.getState();
@@ -773,9 +935,13 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
     return;
   }
   const latestBeforeWorker = useEditor.getState();
-  if (latestBeforeWorker.project.id !== projectId || projectEpoch !== generationEpoch || voiceoverSourceSignature(latestBeforeWorker.project.lyrics.lines) !== sourceSignature) {
+  if (
+    latestBeforeWorker.project.id !== projectId ||
+    projectEpoch !== generationEpoch ||
+    voiceoverSourceSignature(latestBeforeWorker.project.lyrics.lines, { voiceIdB }) !== sourceSignature
+  ) {
     if (latestBeforeWorker.project.id === projectId && projectEpoch === generationEpoch) {
-      store.setVoiceoverJob({ state: 'CANCELLED', progress: 0, message: 'Lyrics changed before speech generation started.', error: null });
+      store.setVoiceoverJob({ state: 'CANCELLED', progress: 0, message: 'Lines changed before speech generation started.', error: null });
     }
     return;
   }
@@ -808,12 +974,14 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
     const message = event.data;
     if (message.id !== id || activeGenerationId !== id || activeGenerationKind !== 'voiceover') return;
     if (message.type === 'MODEL_READY') {
-      if (modelBundle.allowFetch && message.version && message.url && message.bundleId) {
-        rememberInstalledModel('piper', voiceId, {
+      const targetVoice = message.voiceId ?? voiceId;
+      const targetBundle = targetVoice === voiceIdB && modelBundleB ? modelBundleB : modelBundle;
+      if (targetBundle.allowFetch && message.version && message.url && message.bundleId) {
+        rememberInstalledModel('piper', targetVoice, {
           version: message.version,
           url: message.url,
           bundleId: message.bundleId,
-          bytes: message.bytes ?? modelBundle.bytes
+          bytes: message.bytes ?? targetBundle.bytes
         });
       }
       return;
@@ -856,8 +1024,8 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
       try {
         const latest = useEditor.getState();
         if (!isCurrentGeneration()) return;
-        if (voiceoverSourceSignature(latest.project.lyrics.lines) !== sourceSignature) {
-          throw new Error('Lyrics changed while speech was being generated. Run generation again for the updated text or timings.');
+        if (voiceoverSourceSignature(latest.project.lyrics.lines, { voiceIdB }) !== sourceSignature) {
+          throw new Error('Lines changed while speech was being generated. Run generation again for the updated text or timings.');
         }
         const pcm = message.pcm;
         const sampleRate = message.sampleRate;
@@ -867,8 +1035,8 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
         const contentHash = await sha256Hex(await wav.arrayBuffer());
         const latestAfterHash = useEditor.getState();
         if (!isCurrentGeneration()) return;
-        if (voiceoverSourceSignature(latestAfterHash.project.lyrics.lines) !== sourceSignature) {
-          throw new Error('Lyrics changed while the voiceover was being saved. Run generation again for the updated text or timings.');
+        if (voiceoverSourceSignature(latestAfterHash.project.lyrics.lines, { voiceIdB }) !== sourceSignature) {
+          throw new Error('Lines changed while the voiceover was being saved. Run generation again for the updated text or timings.');
         }
         const fileName = suggestedFileName(latestAfterHash.project, '-voiceover.wav');
         const record: AssetRecord = {
@@ -883,9 +1051,17 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
         const saved = await saveAsset(record, wav);
         const latestAfterSave = useEditor.getState();
         if (!isCurrentGeneration()) return;
-        if (voiceoverSourceSignature(latestAfterSave.project.lyrics.lines) !== sourceSignature) {
-          throw new Error('Lyrics changed while the voiceover was being saved. Run generation again for the updated text or timings.');
+        if (voiceoverSourceSignature(latestAfterSave.project.lyrics.lines, { voiceIdB }) !== sourceSignature) {
+          throw new Error('Lines changed while the voiceover was being saved. Run generation again for the updated text or timings.');
         }
+
+        const measuredDurationUs = message.durationUs ?? Math.round((pcm.length / sampleRate) * 1_000_000);
+        const synced =
+          mode === 'sequential' && message.cues && message.cues.length > 0
+            ? applyMeasuredVoiceoverCues(latestAfterSave.project.lyrics.lines, message.cues, { pauseMs })
+            : null;
+        const finalLines = synced ? synced.lines : latestAfterSave.project.lyrics.lines;
+        const finalSignature = voiceoverSourceSignature(finalLines, { voiceIdB });
 
         const meta: VoiceoverMeta = {
           assetId: saved.id,
@@ -894,19 +1070,55 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
           bytes: saved.bytes,
           contentHash: saved.contentHash,
           sampleRate,
-          durationUs: message.durationUs ?? Math.round((pcm.length / sampleRate) * 1_000_000),
+          durationUs: measuredDurationUs,
           voiceId,
-          sourceSignature,
+          voiceIdB,
+          mode,
+          ...(mode === 'sequential' ? { pauseMs } : {}),
+          sourceSignature: finalSignature,
           enabled: true,
-          musicGain: 0.25,
-          speechGain: 1,
+          musicGain: latestAfterSave.project.voiceover?.musicGain ?? 0.25,
+          speechGain: latestAfterSave.project.voiceover?.speechGain ?? 1,
           createdAt: Date.now()
         };
         voiceoverAudio = { pcm, sampleRate, assetId: saved.id };
         engineVoiceoverAssetId = null;
-        store.commit('Generate speech voiceover', (p) => ({ ...p, voiceover: meta }));
-        store.setVoiceoverJob({ state: 'COMPLETE', progress: 1, message: `Generated speech for ${message.lineCount ?? lines.length} lines.`, error: null, available: true });
-        store.notify({ kind: 'success', title: 'Voiceover generated', detail: 'Preview with Play, adjust the mix below, or include it in the video export.' });
+        store.commit(
+          synced ? 'Generate & sync speech voiceover' : 'Generate speech voiceover',
+          (p) => {
+            const introUs = p.design.intro.enabled ? p.design.intro.durationUs : 0;
+            const outroUs = p.design.outro.enabled ? p.design.outro.durationUs : 0;
+            const syncedEndUs = synced
+              ? Math.max(p.audio?.durationUs ?? 0, introUs + Math.max(measuredDurationUs, synced.totalDurationUs) + outroUs)
+              : p.export.rangeEndUs;
+            return {
+              ...p,
+              lyrics: synced ? { ...p.lyrics, lines: finalLines } : p.lyrics,
+              voiceover: meta,
+              export: synced ? { ...p.export, rangeStartUs: 0, rangeEndUs: syncedEndUs } : p.export
+            };
+          }
+        );
+        syncVoiceoverPlayback();
+        if (!useEditor.getState().project.audio) {
+          void analyseStandaloneVoiceover(pcm, sampleRate, projectId, generationEpoch);
+        }
+        store.setVoiceoverJob({
+          state: 'COMPLETE',
+          progress: 1,
+          message: synced
+            ? `Synced ${message.lineCount ?? lines.length} scenes to local voiceover.`
+            : `Generated speech for ${message.lineCount ?? lines.length} lines.`,
+          error: null,
+          available: true
+        });
+        store.notify({
+          kind: 'success',
+          title: synced ? 'Scenes synced to speech' : 'Voiceover generated',
+          detail: synced
+            ? 'Every scene duration now matches its exact local voiceover. Press Play to preview or Export video.'
+            : 'Preview with Play, adjust the mix below, or include it in the video export.'
+        });
         await persist();
       } catch (error) {
         if (!isCurrentGeneration()) return;
@@ -919,7 +1131,18 @@ async function runVoiceoverGeneration(voiceId: string): Promise<void> {
   };
 
   worker.onerror = (event) => fail(event.message || 'The speech worker stopped unexpectedly.');
-  worker.postMessage({ type: 'SPEAK', id, voiceId, lines, durationUs, modelBundle });
+  worker.postMessage({
+    type: 'SPEAK',
+    id,
+    voiceId,
+    voiceIdB,
+    mode,
+    pauseUs: usFromMs(pauseMs),
+    lines,
+    durationUs,
+    modelBundle,
+    modelBundleB
+  });
 }
 
 export function cancelVoiceoverGeneration(): void {
@@ -940,9 +1163,12 @@ export async function removeGeneratedVoiceover(): Promise<void> {
   const store = useEditor.getState();
   const removed = store.project.voiceover;
   if (!removed) return;
+  const hasSong = store.project.audio !== null;
   store.commit('Remove generated voiceover', (project) => ({ ...project, voiceover: null }));
   if (voiceoverAudio?.assetId === removed.assetId) voiceoverAudio = null;
+  if (!hasSong) store.setAnalysis({ peaks: null, spectrum: null, beatGrid: null });
   store.setVoiceoverJob({ state: 'IDLE', progress: 0, message: '', error: null, available: false });
+  syncVoiceoverPlayback();
   await persist();
 }
 
@@ -951,24 +1177,38 @@ export async function removeGeneratedVoiceover(): Promise<void> {
 export async function togglePlayback(): Promise<void> {
   const store = useEditor.getState();
   const player = ensureEngine();
-  if (!store.project.audio) {
-    store.notify({ kind: 'warning', title: 'No audio yet', detail: 'Import an audio file to play the timeline.' });
-    return;
+  if (store.project.audio) {
+    if (!decoded) {
+      const ok = await hydrateAudioFromStorage();
+      if (!ok) return;
+    }
+  } else {
+    if (store.project.voiceover && !voiceoverAudio) {
+      await hydrateVoiceoverFromStorage();
+    }
+    if (store.project.lyrics.lines.length === 0 && !store.project.voiceover) {
+      store.notify({
+        kind: 'warning',
+        title: 'Nothing on the timeline yet',
+        detail: 'Import audio, paste a script, or load a Video-as-Code template to play.'
+      });
+      return;
+    }
   }
-  if (!decoded) {
-    const ok = await hydrateAudioFromStorage();
-    if (!ok) return;
-  }
+  syncVoiceoverPlayback();
   const started = await player.toggle();
-  if (!started && player.currentState !== 'playing') {
+  if (!started && player.currentState === 'blocked') {
     store.setMedia({ ...store.media, error: appError('AUDIOCONTEXT_BLOCKED') });
   }
 }
 
 export function seekTo(timeUs: number): void {
   const store = useEditor.getState();
-  ensureEngine().seek(timeUs);
-  store.setPlayhead(timeUs);
+  const player = ensureEngine();
+  player.setVirtualDuration(timelineDurationUs());
+  const clamped = Math.max(0, Math.min(timelineDurationUs(), timeUs));
+  player.seek(clamped);
+  store.setPlayhead(clamped);
 }
 
 export function nudgePlayhead(deltaUs: number): void {
@@ -1000,8 +1240,9 @@ export function buildCurrentScene(pixelRatio = 1) {
   const scene = buildScene(state.project, {
     spectrum: state.spectrum,
     beatGrid: state.beatGrid,
+    assets: { images: sceneImages },
     pixelRatio,
-    durationUs: state.project.audio?.durationUs ?? null
+    durationUs: null
   });
   return { scene, measure };
 }
@@ -1016,10 +1257,18 @@ export async function runExport(): Promise<void> {
   const edge = getEdgeClient();
   const { project } = store;
 
-  if (!project.audio || !decoded) {
-    store.setRender({ state: 'FAILED', error: appError('NO_AUDIO_FOR_RENDER') });
-    return;
+  if (project.audio && !decoded) {
+    const ok = await hydrateAudioFromStorage();
+    if (!ok) {
+      store.setRender({ state: 'FAILED', error: appError('NO_AUDIO_FOR_RENDER') });
+      return;
+    }
   }
+  if (!project.audio && project.voiceover && !voiceoverAudio) {
+    await hydrateVoiceoverFromStorage();
+  }
+  await hydrateImagesFromStorage();
+
   if (!isExportSupported()) {
     store.setRender({ state: 'FAILED', error: appError('WEBCODECS_UNAVAILABLE') });
     edge.track('export_failed', { bucket: 'webcodecs-missing' });
@@ -1044,8 +1293,6 @@ export async function runExport(): Promise<void> {
   edge.track('export_started', { bucket: `${project.export.width}x${project.export.height}` });
 
   try {
-    const audioSupported = await checkAudioEncoderSupport(decoded.sampleRate, decoded.channels);
-    if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
     const voiceoverMeta = project.voiceover;
     const voiceoverCurrent = isVoiceoverCurrent(project) && voiceoverAudio?.assetId === voiceoverMeta?.assetId;
     const includeVoiceover = !!voiceoverMeta?.enabled && voiceoverCurrent && !!voiceoverAudio;
@@ -1053,14 +1300,32 @@ export async function runExport(): Promise<void> {
       store.notify({
         kind: 'warning',
         title: 'Generated speech is out of date or unavailable',
-        detail: 'This export will use the original audio only. Regenerate speech to match the current lyrics, or reopen the project in the browser where its voiceover is stored.'
+        detail: project.audio
+          ? 'This export will use the original audio only. Regenerate speech to match the current script.'
+          : 'This export will render silent video. Regenerate speech to include voiceover audio.'
       });
     }
-    const exportRangeStartUs = project.export.rangeStartUs;
-    const exportRangeEndUs = Math.min(project.export.rangeEndUs, project.audio.durationUs);
-    const voiceoverMixed = project.export.includeAudio && includeVoiceover && !!voiceoverMeta && !!voiceoverAudio;
-    const audioForExport = voiceoverMixed && voiceoverMeta && voiceoverAudio
-      ? mixVoiceover({
+
+    const totalTimeline = timelineDurationUs();
+    const exportRangeStartUs = Math.max(0, project.export.rangeStartUs);
+    const maxEndUs = project.audio && !includeVoiceover ? project.audio.durationUs : totalTimeline;
+    const rawEnd = project.export.rangeEndUs > exportRangeStartUs ? project.export.rangeEndUs : maxEndUs;
+    const exportRangeEndUs = Math.max(exportRangeStartUs + usFromMs(200), Math.min(rawEnd, Math.max(maxEndUs, rawEnd)));
+
+    let audioForExport: Float32Array | null = null;
+    let exportSampleRate = 48_000;
+    let exportChannels = 1;
+    let audioStartUs = 0;
+    let audioSupported = false;
+    let compactAudio = false;
+
+    if (project.export.includeAudio && project.audio && decoded) {
+      exportSampleRate = decoded.sampleRate;
+      exportChannels = decoded.channels;
+      audioSupported = await checkAudioEncoderSupport(exportSampleRate, exportChannels);
+      if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
+      if (includeVoiceover && voiceoverMeta && voiceoverAudio) {
+        audioForExport = mixVoiceover({
           music: decoded.interleaved,
           musicSampleRate: decoded.sampleRate,
           channels: decoded.channels,
@@ -1070,33 +1335,61 @@ export async function runExport(): Promise<void> {
           musicGain: voiceoverMeta.musicGain,
           voiceGain: voiceoverMeta.speechGain,
           rangeStartUs: exportRangeStartUs,
-          rangeEndUs: exportRangeEndUs
-        })
-      : decoded.interleaved;
+          rangeEndUs: exportRangeEndUs,
+          extendToRangeEnd: exportRangeEndUs > project.audio.durationUs
+        });
+        audioStartUs = exportRangeStartUs;
+        compactAudio = true;
+      } else {
+        audioForExport = decoded.interleaved;
+      }
+    } else if (project.export.includeAudio && !project.audio && includeVoiceover && voiceoverMeta && voiceoverAudio) {
+      // Standalone script-to-video voiceover: prefer native rate, fall back to 48 kHz AAC.
+      const nativeOk = await checkAudioEncoderSupport(voiceoverAudio.sampleRate, 1);
+      const fallbackRate = 48_000;
+      const targetRate = nativeOk ? voiceoverAudio.sampleRate : fallbackRate;
+      audioSupported = nativeOk || (await checkAudioEncoderSupport(fallbackRate, 1));
+      if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
+      const rendered = renderStandaloneVoiceover({
+        voice: voiceoverAudio.pcm,
+        voiceSampleRate: voiceoverAudio.sampleRate,
+        targetSampleRate: targetRate,
+        voiceTimelineOffsetUs: voiceoverTimelineOffsetUs(project),
+        voiceGain: voiceoverMeta.speechGain,
+        rangeStartUs: exportRangeStartUs,
+        rangeEndUs: exportRangeEndUs
+      });
+      audioForExport = rendered.pcm;
+      exportSampleRate = rendered.sampleRate;
+      exportChannels = 1;
+      audioStartUs = exportRangeStartUs;
+      compactAudio = true;
+    }
 
-    if (project.export.includeAudio && !audioSupported) {
+    const hasIntendedAudio = audioForExport !== null;
+    if (hasIntendedAudio && !audioSupported) {
       store.notify({
         kind: 'warning',
         title: 'Audio will be exported separately',
-        detail: 'This browser has no AAC encoder, so you will get a silent MP4 plus a WAV file containing the selected music and voiceover mix. Mux them in any editor, or use Chrome or Edge for a single file.'
+        detail: 'This browser has no AAC encoder, so you will get a silent MP4 plus a WAV file containing the audio track. Mux them in any editor, or use Chrome or Edge for a single file.'
       });
     }
 
     const output = await exportVideo({
       scene,
-      interleaved: project.export.includeAudio && audioSupported ? audioForExport : null,
-      sampleRate: decoded.sampleRate,
-      channels: decoded.channels,
+      interleaved: hasIntendedAudio && audioSupported ? audioForExport : null,
+      sampleRate: exportSampleRate,
+      channels: exportChannels,
       width: project.export.width,
       height: project.export.height,
       fps: project.export.fps,
       videoBitrate: project.export.videoBitrate,
       audioBitrate: project.export.audioBitrate,
       codec: project.export.codec,
-      includeAudio: project.export.includeAudio && audioSupported,
+      includeAudio: hasIntendedAudio && audioSupported,
       rangeStartUs: exportRangeStartUs,
       rangeEndUs: exportRangeEndUs,
-      audioStartUs: voiceoverMixed ? exportRangeStartUs : 0,
+      audioStartUs,
       renderOptions: { measure, showHeat: false },
       signal,
       onProgress: (progress) => {
@@ -1114,7 +1407,7 @@ export async function runExport(): Promise<void> {
 
     if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
     const fileName = project.export.fileName.trim()
-      ? sanitizeFileName(project.export.fileName.trim(), 'lyric-video') + '.mp4'
+      ? sanitizeFileName(project.export.fileName.trim(), 'video') + '.mp4'
       : suggestedFileName(project, '.mp4');
 
     store.setRender({
@@ -1125,12 +1418,12 @@ export async function runExport(): Promise<void> {
     });
     downloadBlob(output.blob, fileName);
 
-    if (project.export.includeAudio && !audioSupported) {
-      const startSample = voiceoverMixed ? 0 : Math.floor((exportRangeStartUs / 1_000_000) * decoded.sampleRate);
-      const endSample = voiceoverMixed
-        ? Math.floor(audioForExport.length / decoded.channels)
-        : Math.floor((exportRangeEndUs / 1_000_000) * decoded.sampleRate);
-      downloadBlob(encodeWav(audioForExport, decoded.sampleRate, decoded.channels, startSample, endSample), suggestedFileName(project, '.wav'));
+    if (hasIntendedAudio && !audioSupported && audioForExport) {
+      const startSample = compactAudio ? 0 : Math.floor((exportRangeStartUs / 1_000_000) * exportSampleRate);
+      const endSample = compactAudio
+        ? Math.floor(audioForExport.length / exportChannels)
+        : Math.floor((exportRangeEndUs / 1_000_000) * exportSampleRate);
+      downloadBlob(encodeWav(audioForExport, exportSampleRate, exportChannels, startSample, endSample), suggestedFileName(project, '.wav'));
     }
 
     edge.track('export_completed', { bucket: `${project.export.width}x${project.export.height}`, outcome: 'success' });
@@ -1172,16 +1465,57 @@ export function exportSubtitle(format: SubtitleFormat): void {
   getEdgeClient().track('subtitle_exported', { bucket: format });
 }
 
+export function exportVideoSpecFile(): void {
+  const store = useEditor.getState();
+  const content = serialiseVideoSpec(store.project);
+  downloadText(content, suggestedFileName(store.project, '.spec.json'), 'application/json;charset=utf-8');
+  store.notify({
+    kind: 'success',
+    title: 'Video spec exported',
+    detail: 'Declarative JSON saved — edit it in any code editor, commit to Git, or re-import anytime.'
+  });
+}
+
+export function importVideoSpecText(text: string, label = 'Import video spec'): boolean {
+  const store = useEditor.getState();
+  const parsed = parseVideoSpecJson(text);
+  if (!parsed.ok || !parsed.spec) {
+    const first = parsed.issues[0];
+    store.notify({
+      kind: 'error',
+      title: 'Invalid video spec',
+      detail: first ? `${first.path}: ${first.message}` : 'Could not validate spec JSON.'
+    });
+    return false;
+  }
+  store.applyVideoSpec(parsed.spec, { label, resetPlayhead: true });
+  void hydrateImagesFromStorage();
+  store.notify({
+    kind: 'success',
+    title: 'Video spec applied',
+    detail: `${parsed.spec.scenes.length} scene${parsed.spec.scenes.length === 1 ? '' : 's'} compiled to the timeline.`
+  });
+  void persist();
+  return true;
+}
+
 export async function exportProjectFile(): Promise<void> {
   const store = useEditor.getState();
   const assets = await listAssets();
-  const referenced = assets.filter((a) => a.id === store.project.audio?.assetId || a.id === store.project.audio?.peaksAssetId || a.id === store.project.voiceover?.assetId);
+  const imageIds = new Set(collectProjectImageIds(store.project));
+  const referenced = assets.filter(
+    (a) =>
+      a.id === store.project.audio?.assetId ||
+      a.id === store.project.audio?.peaksAssetId ||
+      a.id === store.project.voiceover?.assetId ||
+      imageIds.has(a.id)
+  );
   const file = buildProjectFile(store.project, referenced);
   downloadText(serialiseProjectFile(file), suggestedFileName(store.project, '.vidlyricsproject'), 'application/json');
   store.notify({
     kind: 'info',
     title: 'Project exported',
-    detail: 'Project files do not embed audio binaries. You will be asked to re-link the original song; generated speech can be re-created if its local WAV is not already stored in this browser.'
+    detail: 'Project files do not embed binary media. You will be asked to re-link external tracks; local voiceover can be regenerated anytime.'
   });
   getEdgeClient().track('project_exported');
 }
@@ -1190,10 +1524,15 @@ export async function importProjectFile(file: File): Promise<void> {
   const store = useEditor.getState();
   try {
     const text = await file.text();
+    if (isVideoSpecJson(text)) {
+      importVideoSpecText(text, `Import ${sanitizeFileName(file.name, 'spec.json')}`);
+      return;
+    }
     const { project, report } = loadProjectJson(JSON.parse(text));
     const audioMissing = project.audio ? !(await getAssetPayload(project.audio.assetId)) : false;
     resetProjectRuntime();
     store.replaceProject(project, { audioMissing });
+    await hydrateImagesFromStorage();
     if (audioMissing) {
       store.setMedia({ state: 'IDLE', stage: 'idle', progress: 0, error: appError('IMPORT_MISSING_ASSET') });
       await hydrateVoiceoverFromStorage();
@@ -1249,6 +1588,7 @@ export async function loadStoredProject(id: string): Promise<boolean> {
   }
   resetProjectRuntime();
   store.replaceProject(loaded.project, { audioMissing: loaded.audioMissing });
+  await hydrateImagesFromStorage();
   if (loaded.audioMissing) {
     store.setMedia({ state: 'IDLE', stage: 'idle', progress: 0, error: appError('IMPORT_MISSING_ASSET') });
     await hydrateVoiceoverFromStorage();
@@ -1274,11 +1614,19 @@ export function preflightExport(project: Project): { ok: boolean; warnings: stri
   return { ok: warnings.length === 0, warnings };
 }
 
-/** Total timeline duration used by the timeline ruler and the export range. */
-export function timelineDurationUs(): number {
-  const { project } = useEditor.getState();
+/** Total composition timeline duration used by playback, ruler and export range. */
+export function projectTimelineDurationUs(project: Project): number {
   const lastLine = project.lyrics.lines.reduce((max, l: Line) => Math.max(max, l.end), 0);
-  return Math.max(project.audio?.durationUs ?? 0, lastLine, usFromSeconds(1));
+  const voiceDur = project.voiceover?.enabled ? project.voiceover.durationUs : 0;
+  const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
+  const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
+  const bodyUs = Math.max(project.audio?.durationUs ?? 0, voiceDur, lastLine);
+  return Math.max(introUs + bodyUs + outroUs, usFromSeconds(1));
+}
+
+/** Total timeline duration for the active editor project. */
+export function timelineDurationUs(): number {
+  return projectTimelineDurationUs(useEditor.getState().project);
 }
 
 export function disposeSession(): void {
@@ -1291,6 +1639,7 @@ export function disposeSession(): void {
   decoded = null;
   voiceoverAudio = null;
   engineVoiceoverAssetId = null;
+  disposeSceneImages();
 }
 
 export async function storageSummary() {

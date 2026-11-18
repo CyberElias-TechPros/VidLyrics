@@ -5,7 +5,7 @@ import { normalizeDisplay, normalizeForMatch } from '../lyrics/normalize';
 import { highlightTokens } from '../lyrics/segment';
 
 /** Current on-disk project format version. Bump only alongside a migration. */
-export const PROJECT_FORMAT_VERSION = 2;
+export const PROJECT_FORMAT_VERSION = 3;
 
 export const APP_NAME = 'Lyrics Video Studio';
 export const APP_VERSION = '1.0.0';
@@ -130,6 +130,7 @@ export function splitLine(line: Line, wordIndex: number): [Line, Line] | null {
     sectionId: line.sectionId,
     locked: line.locked,
     style: line.style,
+    scene: line.scene,
     speaker: line.speaker,
     source: line.source
   });
@@ -139,6 +140,7 @@ export function splitLine(line: Line, wordIndex: number): [Line, Line] | null {
     sectionId: line.sectionId,
     locked: line.locked,
     style: line.style,
+    scene: line.scene,
     speaker: line.speaker,
     source: line.source
   });
@@ -154,6 +156,7 @@ export function mergeLines(a: Line, b: Line): Line {
     sectionId: a.sectionId,
     locked: a.locked && b.locked,
     style: a.style,
+    scene: a.scene ?? b.scene,
     speaker: a.speaker,
     source: a.source === 'human' || b.source === 'human' ? 'human' : a.source
   });

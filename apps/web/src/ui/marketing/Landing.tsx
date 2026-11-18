@@ -285,24 +285,27 @@ export function Landing() {
               <span className="ln"><span>in <span className="accent">minutes</span>.</span></span>
             </h1>
             <p className="hero-sub">
-              Drop in a track and your lyrics. Tap along once, pick a look, export an MP4 and the
-              subtitle files. No upload, no render queue, no account — your audio never leaves the
-              machine it came from.
+              Sync lyrics to a track, turn a plain script into a narrated video with local TTS, or
+              author motion graphics as declarative JSON. No upload, no render queue, no account —
+              everything runs on the machine it came from.
             </p>
             <div className="hero-cta">
               <Link to="/app" className="btn btn-primary btn-lg">
                 Start a lyric video
               </Link>
+              <Link to="/app?template=video-as-code" className="btn btn-ghost btn-lg">
+                Video as code
+              </Link>
               <a href="#how" className="btn btn-ghost btn-lg">
-                See how it works
+                How it works
               </a>
             </div>
 
             <div className="hero-proof">
               <span><strong>100%</strong> client-side</span>
               <span><strong>0</strong> files uploaded</span>
+              <span><strong>Local TTS + JSON Spec</strong></span>
               <span><strong>MP4 + LRC + SRT + VTT + ASS</strong></span>
-              <span><strong>Free</strong>, no account</span>
             </div>
           </div>
 

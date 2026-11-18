@@ -1,20 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useEditor } from '../../state/store';
 import { Preview } from './Preview';
 import { Timeline } from './Timeline';
 import { DesignPanel, ExportPanel, LyricsPanel } from './Panels';
+import { CodePanel } from './CodePanel';
 import { formatTimecode, usFromMs } from '../../core/time';
 import { tapProgress } from '../../core/timing/tap';
+import { isVideoSpecJson } from '../../core/spec/schema';
+import { VIDEO_TEMPLATES } from '../../core/spec/templates';
 import {
-  cancelExport, importAudioFile, relinkAudioFile, importProjectFile, loadStoredProject, persist,
-  runExport, seekTo, togglePlayback, nudgePlayhead, disposeSession,
-  setLoopRegion, clearLoopRegion
+  cancelExport, importAudioFile, relinkAudioFile, importProjectFile, importVideoSpecText, importImageAsset,
+  loadStoredProject, persist, runExport, seekTo, togglePlayback, nudgePlayhead, disposeSession,
+  setLoopRegion, clearLoopRegion, projectTimelineDurationUs
 } from '../../media/session';
 import { listProjects, deleteProject, garbageCollectAssets } from '../../storage/projectRepo';
 import { useHotkeys, useModifierHotkeys } from '../../lib/hooks';
 import { RECOVERY_LABELS } from '../../core/errors';
-import { classifyFile, validateAudioFile, validateLyricsText } from '../../core/validation/files';
+import { classifyFile, validateLyricsText } from '../../core/validation/files';
 import { parseLyrics } from '../../core/lyrics/parse';
 
 /**
@@ -38,6 +41,7 @@ const SHORTCUTS: [string, string][] = [
   ['+ / −', 'Zoom timeline in / out'],
   ['G', 'Toggle safe-area guides'],
   ['H', 'Toggle confidence heat'],
+  ['C', 'Open Video-as-Code spec editor'],
   ['E', 'Export video'],
   ['Ctrl/⌘ + Z', 'Undo'],
   ['Ctrl/⌘ + Shift + Z', 'Redo']
@@ -46,6 +50,7 @@ const SHORTCUTS: [string, string][] = [
 export function Editor() {
   const store = useEditor();
   const { project, media, render, tap, tapActive, playheadUs, playing, panel, dirty, notices } = store;
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [projects, setProjects] = useState<Awaited<ReturnType<typeof listProjects>>>([]);
@@ -76,6 +81,25 @@ export function Editor() {
   }, []);
 
   useEffect(() => () => disposeSession(), []);
+
+  // Support deep links like `/app?template=video-as-code` or `/app?panel=code`.
+  useEffect(() => {
+    const templateId = searchParams.get('template');
+    const requestedPanel = searchParams.get('panel');
+    if (!templateId && !requestedPanel) return;
+    if (templateId) {
+      const match = VIDEO_TEMPLATES.find((t) => t.id === templateId) ?? VIDEO_TEMPLATES[0];
+      if (match && useEditor.getState().project.lyrics.lines.length === 0 && !useEditor.getState().project.audio) {
+        useEditor.getState().applyVideoSpec(match.spec, { label: `Template: ${match.name}`, resetPlayhead: true });
+      }
+      useEditor.getState().setPanel('code');
+      setPanelOpen(true);
+    } else if (requestedPanel === 'code' || requestedPanel === 'lyrics' || requestedPanel === 'design' || requestedPanel === 'export') {
+      useEditor.getState().setPanel(requestedPanel);
+      setPanelOpen(true);
+    }
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   /* --------------------------- shortcuts --------------------------- */
 
@@ -111,13 +135,14 @@ export function Editor() {
     ArrowRight: () => nudgePlayhead(usFromMs(100)),
     '[': () => selectedLine && store.nudgeLine(selectedLine.id, 'start', -usFromMs(50)),
     ']': () => selectedLine && store.nudgeLine(selectedLine.id, 'end', usFromMs(50)),
-    i: () => setLoopRegion(playheadUs, project.audio?.durationUs ?? playheadUs + usFromMs(5000)),
+    i: () => setLoopRegion(playheadUs, projectTimelineDurationUs(project) || playheadUs + usFromMs(5000)),
     o: () => setLoopRegion(useEditor.getState().loop?.startUs ?? 0, playheadUs),
     l: () => clearLoopRegion(),
     '+': () => store.setZoom(project.ui.zoomPxPerSecond * 1.25),
     '-': () => store.setZoom(project.ui.zoomPxPerSecond / 1.25),
     g: () => store.setShowGuides(!store.showGuides),
     h: () => store.setShowHeat(!store.showHeat),
+    c: () => { store.setPanel('code'); setPanelOpen(true); },
     e: () => void runExport(),
     '?': () => setShowShortcuts(true)
   });
@@ -155,6 +180,13 @@ export function Editor() {
       return;
     }
     const text = await file.text();
+    if (isVideoSpecJson(text)) {
+      if (importVideoSpecText(text, `Import ${file.name}`)) {
+        store.setPanel('code');
+        setPanelOpen(true);
+      }
+      return;
+    }
     const validity = validateLyricsText(text);
     if (!validity.ok) {
       store.notify({ kind: 'error', title: 'No lyrics found', detail: 'That file had no readable lyric lines.' });
@@ -188,11 +220,37 @@ export function Editor() {
     if (kind === 'audio' || kind === 'unknown') void onAudioFiles(event.dataTransfer.files);
     else if (kind === 'lyrics') void onLyricFiles(event.dataTransfer.files);
     else if (kind === 'project') void onProjectFiles(event.dataTransfer.files);
-    else store.notify({ kind: 'warning', title: 'Unsupported drop', detail: 'Choose an audio file, lyrics file, or VidLyrics project.' });
+    else if (kind === 'image') {
+      void (async () => {
+        const asset = await importImageAsset(file);
+        if (asset) {
+          store.setDesign({
+            background: {
+              ...store.project.design.background,
+              kind: 'image',
+              assetId: asset.id,
+              scrim: Math.max(0.3, store.project.design.background.scrim)
+            }
+          });
+          store.notify({ kind: 'success', title: 'Background image imported', detail: asset.fileName });
+        }
+      })();
+    } else store.notify({ kind: 'warning', title: 'Unsupported drop', detail: 'Choose an audio file, script/lyrics file, spec JSON, image, or VidLyrics project.' });
   };
 
   const busy = render.state === 'RENDERING' || render.state === 'ENCODING' || render.state === 'PREPARING' || render.state === 'MUXING' || render.state === 'QUEUED';
   const relinkingAudio = media.state === 'IMPORTING' || media.state === 'DECODING' || media.state === 'ANALYZING';
+  const totalUs = projectTimelineDurationUs(project);
+  const hasTimelineContent = Boolean(project.audio) || media.state === 'READY' || project.lyrics.lines.length > 0 || Boolean(project.voiceover);
+
+  const startWithCodeTemplate = () => {
+    const starter = VIDEO_TEMPLATES[0];
+    if (starter) {
+      store.applyVideoSpec(starter.spec, { label: `Template: ${starter.name}`, resetPlayhead: true });
+    }
+    store.setPanel('code');
+    setPanelOpen(true);
+  };
 
   return (
     <div
@@ -252,13 +310,16 @@ export function Editor() {
           <button className="btn btn-sm btn-ghost" onClick={() => lyricInputRef.current?.click()}>
             Lyrics
           </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => { store.setPanel('code'); setPanelOpen(true); }} title="Video-as-Code spec editor (C)">
+            Code
+          </button>
           <button className="btn btn-sm btn-ghost" onClick={() => projectInputRef.current?.click()}>
             Open
           </button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setShowProjects(true)}>
+          <button className="btn btn-sm btn-ghost" onClick={async () => { setShowProjects(true); setProjects(await listProjects()); }}>
             Projects
           </button>
-          <button className="btn btn-sm btn-primary" onClick={() => void runExport()} disabled={busy || hasExportBlockers(project)}>
+          <button className="btn btn-sm btn-primary" onClick={() => void runExport()} disabled={busy || hasExportBlockers(project, store.audioMissing)}>
             {busy ? 'Rendering…' : 'Export video'}
           </button>
         </div>
@@ -266,7 +327,8 @@ export function Editor() {
 
       {/* ---------------- rail ---------------- */}
       <nav className="ed-rail" aria-label="Tools">
-        <button className="ed-rail-btn" aria-pressed={panel === 'lyrics'} title="Lyrics" onClick={() => { store.setPanel('lyrics'); setPanelOpen(true); }}>≡</button>
+        <button className="ed-rail-btn" aria-pressed={panel === 'lyrics'} title="Script & lyrics" onClick={() => { store.setPanel('lyrics'); setPanelOpen(true); }}>≡</button>
+        <button className="ed-rail-btn mono" style={{ fontSize: 11, fontWeight: 700 }} aria-pressed={panel === 'code'} title="Video as code (C)" onClick={() => { store.setPanel('code'); setPanelOpen(true); }}>{'{}'}</button>
         <button className="ed-rail-btn" aria-pressed={panel === 'design'} title="Design" onClick={() => { store.setPanel('design'); setPanelOpen(true); }}>◐</button>
         <button className="ed-rail-btn" aria-pressed={panel === 'export'} title="Export" onClick={() => { store.setPanel('export'); setPanelOpen(true); }}>↧</button>
         <span className="ed-rail-sep" />
@@ -300,16 +362,17 @@ export function Editor() {
               <button className="btn btn-ghost" onClick={() => projectInputRef.current?.click()}>Open project</button>
             </div>
           </div>
-        ) : media.error || (!project.audio && media.state !== 'READY') ? (
+        ) : media.error || !hasTimelineContent ? (
           <div className="ed-empty" style={{ gridRow: '1 / 3', placeSelf: 'center' }}>
-            <h2>Start with a track</h2>
+            <h2>Start with audio, a script, or code</h2>
             <p>
-              Drop an audio file anywhere on this window, or choose one below. Everything that happens
-              next — decode, analyse, time, render, encode — happens on this device.
+              Drop an audio track, paste a script for local voiceover, or author scenes in declarative JSON.
+              Every step — decode, TTS, render, MP4 encode — runs privately on this device.
             </p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
               <button className="btn btn-primary" onClick={() => audioInputRef.current?.click()}>Choose audio</button>
-              <button className="btn btn-ghost" onClick={() => lyricInputRef.current?.click()}>Import lyrics</button>
+              <button className="btn btn-ghost" onClick={startWithCodeTemplate}>Video as code</button>
+              <button className="btn btn-ghost" onClick={() => { store.setPanel('lyrics'); setPanelOpen(true); }}>Script to video</button>
               <button className="btn btn-ghost" onClick={() => projectInputRef.current?.click()}>Open project</button>
             </div>
             {media.error ? (
@@ -339,21 +402,22 @@ export function Editor() {
         ) : (
           <Preview />
         )}
-        {project.audio ? <Timeline /> : null}
+        {hasTimelineContent && !(store.audioMissing && project.audio) ? <Timeline /> : null}
       </main>
 
       {/* ---------------- panel ---------------- */}
       <aside className="ed-panel" aria-label="Inspector">
         <div className="ed-tabs" role="tablist">
-          {(['lyrics', 'design', 'export'] as const).map((tab) => (
+          {(['lyrics', 'code', 'design', 'export'] as const).map((tab) => (
             <button key={tab} className="ed-tab" role="tab" aria-selected={panel === tab} onClick={() => store.setPanel(tab)}>
-              {tab}
+              {tab === 'lyrics' ? 'script' : tab}
             </button>
           ))}
           <button className="ed-tab" style={{ flex: 'none', paddingInline: 10 }} onClick={() => setPanelOpen(false)} aria-label="Close panel">✕</button>
         </div>
         <div className="ed-panel-body">
           {panel === 'lyrics' ? <LyricsPanel /> : null}
+          {panel === 'code' ? <CodePanel /> : null}
           {panel === 'design' ? <DesignPanel /> : null}
           {panel === 'export' ? <ExportPanel /> : null}
         </div>
@@ -366,21 +430,29 @@ export function Editor() {
           {playing ? '❚❚' : '▶'}
         </button>
         <span className="ed-time mono">
-          {formatTimecode(playheadUs, true, project.export.fps)} <small>/ {formatTimecode(project.audio?.durationUs ?? 0)}</small>
+          {formatTimecode(playheadUs, true, project.export.fps)} <small>/ {formatTimecode(totalUs)}</small>
         </span>
         <input
           className="ed-scrub"
           type="range"
           min={0}
-          max={Math.max(1, project.audio?.durationUs ?? 1)}
+          max={Math.max(1, totalUs)}
           step={1000}
-          value={Math.min(playheadUs, project.audio?.durationUs ?? 0)}
+          value={Math.min(playheadUs, totalUs)}
           onChange={(e) => seekTo(Number(e.target.value))}
           aria-label="Scrub playhead"
         />
         <span className="ed-transport-spacer" />
         <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-          {media.state === 'READY' ? 'Audio ready' : media.state}
+          {media.state === 'READY'
+            ? 'Audio ready'
+            : media.state !== 'IDLE'
+              ? media.state
+              : project.voiceover
+                ? 'Voiceover ready'
+                : project.lyrics.lines.length > 0
+                  ? `${project.lyrics.lines.length} scene${project.lyrics.lines.length === 1 ? '' : 's'}`
+                  : 'IDLE'}
         </span>
         {busy ? (
           <button className="btn btn-sm btn-ghost" onClick={() => cancelExport()}>Cancel render</button>
@@ -457,7 +529,7 @@ export function Editor() {
                   <div style={{ minWidth: 0 }}>
                     <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title}</strong>
                     <span className="ed-hint">
-                      {p.lineCount} lines · {p.hasAudio ? 'audio linked' : 'no audio'} · {new Date(p.updatedAt).toLocaleString()}
+                      {p.lineCount} scenes · {p.hasAudio ? 'audio linked' : p.hasVoiceover ? 'local TTS' : 'script / code'} · {new Date(p.updatedAt).toLocaleString()}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
@@ -497,7 +569,9 @@ export function Editor() {
 }
 
 /** Keep the export button honest: never offer a render that cannot succeed. */
-function hasExportBlockers(project: ReturnType<typeof useEditor.getState>['project']): boolean {
-  return project.lyrics.lines.length === 0 || !project.audio;
+function hasExportBlockers(project: ReturnType<typeof useEditor.getState>['project'], audioMissing: boolean): boolean {
+  if (project.lyrics.lines.length === 0) return true;
+  if (project.audio && audioMissing) return true;
+  return false;
 }
 

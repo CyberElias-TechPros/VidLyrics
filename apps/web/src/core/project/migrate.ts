@@ -41,6 +41,21 @@ export const MIGRATIONS: Migration[] = [
     from: 1,
     name: 'v1 -> v2: add generated voiceover metadata',
     apply: (project) => ({ ...project, voiceover: project.voiceover ?? null })
+  },
+  {
+    from: 2,
+    name: 'v2 -> v3: add programmatic scene visuals and sequential voiceover options',
+    apply: (project) => {
+      const voiceover =
+        project.voiceover && typeof project.voiceover === 'object'
+          ? {
+              ...(project.voiceover as Record<string, unknown>),
+              mode: (project.voiceover as Record<string, unknown>).mode ?? 'timed',
+              voiceIdB: (project.voiceover as Record<string, unknown>).voiceIdB ?? null
+            }
+          : project.voiceover ?? null;
+      return { ...project, voiceover };
+    }
   }
 ];
 

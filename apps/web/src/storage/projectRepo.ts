@@ -24,6 +24,7 @@ export interface ProjectSummary {
   updatedAt: number;
   lineCount: number;
   hasAudio: boolean;
+  hasVoiceover: boolean;
   audioMissing: boolean;
   durationUs: number;
   themeId: string;
@@ -31,6 +32,7 @@ export interface ProjectSummary {
 
 function summarise(stored: StoredProject): ProjectSummary {
   const project = stored.project;
+  const lastLineEnd = project.lyrics.lines.reduce((max, l) => Math.max(max, l.end), 0);
   return {
     id: project.id,
     title: project.meta.title || 'Untitled project',
@@ -38,8 +40,9 @@ function summarise(stored: StoredProject): ProjectSummary {
     updatedAt: stored.updatedAt,
     lineCount: project.lyrics.lines.length,
     hasAudio: project.audio !== null,
+    hasVoiceover: project.voiceover !== null,
     audioMissing: stored.audioMissing,
-    durationUs: project.audio?.durationUs ?? 0,
+    durationUs: Math.max(project.audio?.durationUs ?? 0, project.voiceover?.durationUs ?? 0, lastLineEnd),
     themeId: project.design.themeId
   };
 }
@@ -114,6 +117,10 @@ export async function garbageCollectAssets(): Promise<number> {
     if (bg?.assetId) referenced.add(bg.assetId);
     const logo = stored?.project?.design?.brand?.logoAssetId;
     if (logo) referenced.add(logo);
+    for (const line of stored?.project?.lyrics?.lines ?? []) {
+      const sceneImg = line?.scene?.background?.assetId;
+      if (sceneImg) referenced.add(sceneImg);
+    }
   }
   const assets = await listAssets();
   let removed = 0;

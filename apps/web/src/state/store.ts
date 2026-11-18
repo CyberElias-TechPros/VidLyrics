@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import type {
-  AppError, Design, ExportSettings, Line, Microseconds, Project, RenderState, SyncState, VoiceoverMeta
+  AppError, Design, ExportSettings, Line, Microseconds, Project, RenderState, SceneVisual, SyncState, VoiceoverMeta
 } from '../core/types';
 import type { TranscriptCue } from '../core/lyrics/transcript';
+import { splitScriptToTimedScenes, timeScenesSequentially, type ScriptSplitOptions } from '../core/lyrics/script';
+import { compileVideoSpec } from '../core/spec/compiler';
+import type { VideoSpec } from '../core/spec/schema';
 import { createProject, createLine, splitLine, mergeLines, newId, PROJECT_FORMAT_VERSION } from '../core/project/factory';
 import {
   applyBatch, applyCommand, createHistory, redo as redoHistory, undo as undoHistory,
@@ -15,7 +18,7 @@ import { tapReducer, createTapSession, applyTaps, type TapSession } from '../cor
 import { inferSections } from '../core/lyrics/structure';
 import { normalizeDisplay } from '../core/lyrics/normalize';
 import { highlightTokens } from '../core/lyrics/segment';
-import { designFromTheme } from '../core/design/tokens';
+import { designFromTheme, getAspect } from '../core/design/tokens';
 import type { PeakData } from '../core/audio/peaks';
 import type { SpectrumEnvelope } from '../core/audio/spectrum';
 import type { BeatGrid } from '../core/audio/beats';
@@ -92,9 +95,10 @@ export interface EditorState {
   tapActive: boolean;
   selectedIds: string[];
   loop: { startUs: Microseconds; endUs: Microseconds } | null;
-  panel: 'lyrics' | 'design' | 'export';
+  panel: 'lyrics' | 'code' | 'design' | 'export';
   showGuides: boolean;
   showHeat: boolean;
+  imageAssetsVersion: number;
   dirty: boolean;
   lastSavedAt: number | null;
   notices: { id: string; kind: 'info' | 'success' | 'warning' | 'error'; title: string; detail?: string }[];
@@ -113,10 +117,13 @@ export interface EditorState {
   replaceProject: (project: Project, options?: { audioMissing?: boolean }) => void;
   setMeta: (patch: Partial<Project['meta']>) => void;
 
-  /* lyrics */
+  /* lyrics & programmatic scenes */
   setLyricsFromText: (text: string, source: Project['lyrics']['source'], fileName?: string | null) => void;
+  setScenesFromScript: (scriptText: string, options?: ScriptSplitOptions) => void;
+  applyVideoSpec: (spec: VideoSpec, options?: { label?: string; coalesceKey?: string; resetPlayhead?: boolean }) => void;
   setLyricsFromTranscript: (cues: TranscriptCue[]) => void;
   updateLineText: (lineId: string, text: string) => void;
+  setLineScene: (lineId: string, patch: Partial<SceneVisual> | null) => void;
   deleteLines: (lineIds: string[]) => void;
   duplicateLines: (lineIds: string[]) => void;
   insertLine: (afterLineId: string | null, text: string) => void;
@@ -155,6 +162,7 @@ export interface EditorState {
   setPanel: (panel: EditorState['panel']) => void;
   setShowGuides: (show: boolean) => void;
   setShowHeat: (show: boolean) => void;
+  bumpImageAssets: () => void;
   setUiMode: (mode: 'simple' | 'advanced') => void;
   setZoom: (zoomPxPerSecond: number) => void;
   markSaved: () => void;
@@ -196,6 +204,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   panel: 'lyrics',
   showGuides: false,
   showHeat: true,
+  imageAssetsVersion: 0,
   dirty: false,
   lastSavedAt: null,
   notices: [],
@@ -295,17 +304,83 @@ export const useEditor = create<EditorState>((set, get) => ({
     const processed = postProcess(estimated, { durationUs: project.audio?.durationUs ?? null, applyLeadIn: true });
     const before = project.lyrics;
     const beforeSections = project.sections;
+    const beforeExport = project.export;
+    const lastEnd = processed.reduce((max, l) => Math.max(max, l.end), 0);
     const command: Command<Project> = {
       label: 'Replace lyrics',
       apply: (p) => ({
         ...p,
         lyrics: { source, originalText: text, originalFileName: fileName, lines: processed },
-        sections: structure.sections
+        sections: structure.sections,
+        export: !p.audio && lastEnd > 0
+          ? { ...p.export, rangeStartUs: 0, rangeEndUs: lastEnd + usFromMs(250) }
+          : p.export
       }),
-      revert: (p) => ({ ...p, lyrics: before, sections: beforeSections })
+      revert: (p) => ({ ...p, lyrics: before, sections: beforeSections, export: beforeExport })
     };
     const result = applyCommand(project, history, command);
     set({ project: result.state, history: result.history, dirty: true });
+  },
+
+  setScenesFromScript: (scriptText, options) => {
+    const { project, history } = get();
+    const { lines, totalDurationUs } = splitScriptToTimedScenes(scriptText, options);
+    if (lines.length === 0) return;
+    const before = project.lyrics;
+    const beforeSections = project.sections;
+    const beforeExport = project.export;
+    const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
+    const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
+    const command: Command<Project> = {
+      label: 'Build scenes from script',
+      apply: (p) => ({
+        ...p,
+        lyrics: { source: 'script', originalText: scriptText, originalFileName: null, lines },
+        sections: [],
+        export: {
+          ...p.export,
+          rangeStartUs: 0,
+          rangeEndUs: Math.max(p.audio?.durationUs ?? 0, introUs + totalDurationUs + outroUs)
+        }
+      }),
+      revert: (p) => ({ ...p, lyrics: before, sections: beforeSections, export: beforeExport })
+    };
+    const result = applyCommand(project, history, command);
+    const first = lines[0];
+    set({
+      project: result.state,
+      history: result.history,
+      selectedIds: first ? [first.id] : [],
+      playheadUs: first ? first.start + introUs : 0,
+      dirty: true
+    });
+  },
+
+  applyVideoSpec: (spec, options) => {
+    const { project, history, playheadUs } = get();
+    const before = project;
+    const compiled = compileVideoSpec(spec, { baseProject: project });
+    const command: Command<Project> = {
+      label: options?.label ?? 'Apply video spec',
+      coalesceKey: options?.coalesceKey,
+      apply: () => compiled,
+      revert: () => before,
+      merge: options?.coalesceKey ? (prev) => ({ ...prev, apply: () => compiled }) : undefined
+    };
+    const result = applyCommand(project, history, command);
+    const maxPlayhead = Math.max(0, compiled.export.rangeEndUs);
+    const firstScene = compiled.lyrics.lines[0];
+    const introUs = compiled.design.intro.enabled ? compiled.design.intro.durationUs : 0;
+    const nextPlayhead = options?.resetPlayhead
+      ? (firstScene ? introUs + firstScene.start + Math.min(usFromMs(700), Math.round((firstScene.end - firstScene.start) * 0.35)) : 0)
+      : Math.min(playheadUs, maxPlayhead);
+    set({
+      project: result.state,
+      history: result.history,
+      playheadUs: nextPlayhead,
+      selectedIds: options?.resetPlayhead && firstScene ? [firstScene.id] : get().selectedIds.filter((id) => compiled.lyrics.lines.some((l) => l.id === id)),
+      dirty: true
+    });
   },
 
   setLyricsFromTranscript: (cues) => {
@@ -370,6 +445,43 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ project: result.state, history: result.history, dirty: true });
   },
 
+  setLineScene: (lineId, patch) => {
+    const { project, history } = get();
+    const before = project.lyrics.lines;
+    const after = before.map((line) => {
+      if (line.id !== lineId) return line;
+      if (patch === null) {
+        const next = { ...line };
+        delete next.scene;
+        return next;
+      }
+      const merged: SceneVisual = { ...(line.scene ?? {}), ...patch };
+      // Prune empty optional fields so specs stay clean.
+      if (!merged.layout || merged.layout === 'caption') delete merged.layout;
+      if (!merged.kicker) delete merged.kicker;
+      if (!merged.subtext) delete merged.subtext;
+      if (!merged.value) delete merged.value;
+      if (!merged.accent) delete merged.accent;
+      if (!merged.enter) delete merged.enter;
+      if (!merged.exit) delete merged.exit;
+      if (!merged.transition) delete merged.transition;
+      if (merged.items && merged.items.length === 0) delete merged.items;
+      if (merged.chart && merged.chart.length === 0) delete merged.chart;
+      if (merged.background && Object.keys(merged.background).length === 0) delete merged.background;
+      const cleanScene = Object.keys(merged).length > 0 ? merged : undefined;
+      return { ...line, scene: cleanScene };
+    });
+    const command: Command<Project> = {
+      label: 'Edit scene visuals',
+      coalesceKey: `scene:${lineId}`,
+      apply: (p) => ({ ...p, lyrics: { ...p.lyrics, lines: after } }),
+      revert: (p) => ({ ...p, lyrics: { ...p.lyrics, lines: before } }),
+      merge: (previous) => ({ ...previous, apply: (p) => ({ ...p, lyrics: { ...p.lyrics, lines: after } }) })
+    };
+    const result = applyCommand(project, history, command);
+    set({ project: result.state, history: result.history, dirty: true });
+  },
+
   deleteLines: (lineIds) => {
     const { project, history } = get();
     const set_ = new Set(lineIds);
@@ -398,6 +510,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         end: source.end + usFromMs(200) + (source.end - source.start),
         sectionId: source.sectionId,
         style: source.style,
+        scene: source.scene,
         speaker: source.speaker,
         translation: source.translation
       });
@@ -614,7 +727,25 @@ export const useEditor = create<EditorState>((set, get) => ({
   generateTimings: () => {
     const { project, history, beatGrid } = get();
     const before = project.lyrics.lines;
+    const beforeExport = project.export;
     const durationUs = project.audio?.durationUs ?? null;
+    if (durationUs === null) {
+      const { lines: timed, totalDurationUs } = timeScenesSequentially(before);
+      const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
+      const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
+      const command: Command<Project> = {
+        label: 'Auto-time scenes by reading speed',
+        apply: (p) => ({
+          ...p,
+          lyrics: { ...p.lyrics, lines: timed },
+          export: { ...p.export, rangeStartUs: 0, rangeEndUs: Math.max(usFromSeconds(1), introUs + totalDurationUs + outroUs) }
+        }),
+        revert: (p) => ({ ...p, lyrics: { ...p.lyrics, lines: before }, export: beforeExport })
+      };
+      const result = applyCommand(project, history, command);
+      set({ project: result.state, history: result.history, dirty: true });
+      return;
+    }
     const estimated = estimateLineTimings(before, { durationUs });
     const processed = postProcess(estimated, {
       durationUs,
@@ -662,12 +793,27 @@ export const useEditor = create<EditorState>((set, get) => ({
   setAspect: (aspectId) => {
     const { project, history } = get();
     const before = project.design;
+    const beforeExport = project.export;
+    const aspect = getAspect(aspectId);
+    const nextWidth = aspectId === 'custom' && project.design.customSize ? project.design.customSize.width : aspect.width;
+    const nextHeight = aspectId === 'custom' && project.design.customSize ? project.design.customSize.height : aspect.height;
     const command: Command<Project> = {
       label: 'Change aspect ratio',
       coalesceKey: 'aspect',
-      apply: (p) => ({ ...p, design: { ...p.design, aspectId } }),
-      revert: (p) => ({ ...p, design: before }),
-      merge: (previous) => ({ ...previous, apply: (p) => ({ ...p, design: { ...p.design, aspectId } }) })
+      apply: (p) => ({
+        ...p,
+        design: { ...p.design, aspectId },
+        export: { ...p.export, width: nextWidth, height: nextHeight }
+      }),
+      revert: (p) => ({ ...p, design: before, export: beforeExport }),
+      merge: (previous) => ({
+        ...previous,
+        apply: (p) => ({
+          ...p,
+          design: { ...p.design, aspectId },
+          export: { ...p.export, width: nextWidth, height: nextHeight }
+        })
+      })
     };
     const result = applyCommand(project, history, command);
     set({ project: result.state, history: result.history, dirty: true });
@@ -730,6 +876,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setPanel: (panel) => set({ panel }),
   setShowGuides: (show) => set({ showGuides: show }),
   setShowHeat: (show) => set({ showHeat: show }),
+  bumpImageAssets: () => set((s) => ({ imageAssetsVersion: s.imageAssetsVersion + 1 })),
   setUiMode: (mode) => {
     const { project, history } = get();
     const command: Command<Project> = {

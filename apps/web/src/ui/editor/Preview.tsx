@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useEditor } from '../../state/store';
-import { buildScene } from '../../core/render/scene';
+import { buildScene, compositionSize } from '../../core/render/scene';
 import { renderFrame } from '../../core/render/frame';
 import { createMeasureFn } from '../../media/canvasMeasurer';
+import { getSceneImages } from '../../media/session';
 import { useDevicePixelRatio, useRafLoop } from '../../lib/hooks';
-import { compositionSize } from '../../core/render/scene';
 import { formatTimecode } from '../../core/time';
 
 /**
@@ -26,6 +26,7 @@ export function Preview() {
   const playing = useEditor((s) => s.playing);
   const showGuides = useEditor((s) => s.showGuides);
   const showHeat = useEditor((s) => s.showHeat);
+  const imageAssetsVersion = useEditor((s) => s.imageAssetsVersion);
   const dpr = useDevicePixelRatio();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -38,23 +39,24 @@ export function Preview() {
       buildScene(project, {
         spectrum,
         beatGrid,
+        assets: { images: getSceneImages() },
         pixelRatio: 1,
-        durationUs: project.audio?.durationUs ?? null
+        durationUs: null
       }),
-    [project, spectrum, beatGrid]
+    [project, spectrum, beatGrid, imageAssetsVersion]
   );
 
   const measure = useMemo(() => createMeasureFn(project.design.typography.fontStack), [project.design.typography.fontStack]);
 
-  // Paint once whenever something other than the playhead changes, so a scrub
-  // that does not move the playhead (a text edit, say) still refreshes.
+  // Paint when the scene, visual flags, or scrubbed playhead changes while paused.
   useEffect(() => {
+    if (playing) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
-    renderFrame(ctx, scene, playheadRef.current, { measure, showGuides, showHeat });
-  }, [scene, measure, showGuides, showHeat, width, height]);
+    renderFrame(ctx, scene, playheadUs, { measure, showGuides, showHeat });
+  }, [scene, measure, showGuides, showHeat, width, height, playheadUs, playing]);
 
   // Size the backing store to the composition, scaled for the display.
   useEffect(() => {

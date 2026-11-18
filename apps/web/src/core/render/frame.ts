@@ -1,4 +1,4 @@
-import type { Microseconds } from '../types';
+import type { BackgroundSpec, Microseconds, SceneTransition } from '../types';
 import type { CompositionBox, Scene } from './scene';
 import { activeLineIndex, toMusicTime, totalDuration } from './scene';
 import { layoutWords, rowOriginX, blockAnchorY, type Measurer } from './layout';
@@ -8,11 +8,21 @@ import {
   easeInOutCubic,
   easeOutBack,
   smoothNoise,
+  spring,
   linear
 } from './easing';
 import { energyAt, bandsAt } from '../audio/spectrum';
 import { beatStrength } from '../audio/beats';
 import { highlightTokens } from '../lyrics/segment';
+import {
+  buildBlockFrame,
+  isBlockLayout,
+  paintBlock,
+  resolveSceneBackground,
+  type BlockFrame
+} from './blocks';
+
+export type { BlockFrame } from './blocks';
 
 /**
  * Frame computation and rasterisation.
@@ -76,6 +86,7 @@ export interface LineFrame {
   shadowColor: string;
   shadowOffsetY: number;
   glow: number;
+  kicker: { text: string; opacity: number; fontSizePx: number } | null;
   translation: { text: string; opacity: number; fontSizePx: number } | null;
   /** Lowest confidence on this line, so preview can flag uncertain timing. */
   minConfidence: number;
@@ -106,6 +117,12 @@ export interface CardFrame {
   kind: 'intro' | 'outro';
 }
 
+export interface BackgroundOverlayFrame {
+  frame: BackgroundFrame;
+  transition: SceneTransition;
+  progress: number;
+}
+
 export interface FrameState {
   timeUs: Microseconds;
   musicTimeUs: Microseconds;
@@ -113,7 +130,9 @@ export interface FrameState {
   height: number;
   progress: number;
   background: BackgroundFrame;
+  backgroundOverlay: BackgroundOverlayFrame | null;
   lines: LineFrame[];
+  blocks: BlockFrame[];
   card: CardFrame | null;
   /** Safe-area rectangle, drawn only when guides are enabled. */
   guides: { x: number; y: number; width: number; height: number };
@@ -178,15 +197,51 @@ export function computeFrameState(scene: Scene, timeUs: Microseconds, measure: M
   const box = scene.box;
   const total = Math.max(1, totalDuration(scene));
 
-  const background = computeBackground(scene, musicTimeUs);
+  const resolvedBg = resolveSceneBackground(scene, musicTimeUs);
+  const background = computeBackground(scene, musicTimeUs, resolvedBg.base);
+  const backgroundOverlay: BackgroundOverlayFrame | null = resolvedBg.overlay
+    ? {
+        frame: computeBackground(scene, musicTimeUs, resolvedBg.overlay.spec),
+        transition: resolvedBg.overlay.transition,
+        progress: resolvedBg.overlay.progress
+      }
+    : null;
   const card = computeCard(scene, timeUs);
 
   const visible = collectVisible(scene, musicTimeUs);
   const currentIndex = activeLineIndex(scene, musicTimeUs);
 
-  const lines: LineFrame[] = visible.map((entry) =>
-    buildLineFrame(scene, entry.index, musicTimeUs, measure, box, currentIndex === entry.index)
-  );
+  const lines: LineFrame[] = [];
+  const blocks: BlockFrame[] = [];
+
+  for (const entry of visible) {
+    const sceneLine = scene.lines[entry.index];
+    if (!sceneLine) continue;
+    if (isBlockLayout(sceneLine)) {
+      const enterProgress = motion.enterUs > 0 ? clamp01((musicTimeUs - (sceneLine.start - motion.enterUs)) / motion.enterUs) : 1;
+      const exitProgress = motion.exitUs > 0 ? clamp01((musicTimeUs - sceneLine.end) / motion.exitUs) : 0;
+      const basePx = Math.round((sceneLine.style.sizeRatio ?? typography.sizeRatio) * scene.height);
+      const env = transitionTransform(
+        sceneLine.scene?.enter ?? motion.enter,
+        sceneLine.scene?.exit ?? motion.exit,
+        enterProgress,
+        exitProgress,
+        basePx,
+        motion.intensity
+      );
+      blocks.push(
+        buildBlockFrame(scene, sceneLine, musicTimeUs, measure, box, {
+          opacity: env.opacity,
+          translateX: env.translateX,
+          translateY: env.translateY,
+          scale: env.scaleFactor,
+          clipWipe: env.clipWipe
+        })
+      );
+    } else {
+      lines.push(buildLineFrame(scene, entry.index, musicTimeUs, measure, box, currentIndex === entry.index));
+    }
+  }
 
   // Resolve vertical collisions: if two lines overlap during a cross-fade, the
   // outgoing one sits above the incoming one rather than on top of it.
@@ -199,7 +254,9 @@ export function computeFrameState(scene: Scene, timeUs: Microseconds, measure: M
     height: scene.height,
     progress: clamp01(timeUs / total),
     background,
+    backgroundOverlay,
     lines,
+    blocks,
     card,
     guides: {
       x: box.contentLeft,
@@ -249,9 +306,9 @@ function buildLineFrame(
   const enterProgress = motion.enterUs > 0 ? clamp01((musicTimeUs - (line.start - motion.enterUs)) / motion.enterUs) : 1;
   const exitProgress = motion.exitUs > 0 ? clamp01((musicTimeUs - line.end) / motion.exitUs) : 0;
 
-  const { opacity, translateX, translateY, blurPx, scaleBase, clipWipe } = transitionTransform(
-    motion.enter,
-    motion.exit,
+  const { opacity, translateX, translateY, blurPx, scaleFactor, clipWipe } = transitionTransform(
+    line.scene?.enter ?? motion.enter,
+    line.scene?.exit ?? motion.exit,
     enterProgress,
     exitProgress,
     fontSizePx,
@@ -319,15 +376,17 @@ function buildLineFrame(
     row.baselineY = blockTop + i * lineHeightPx + fontSizePx * 0.82;
   });
 
-  const translationText = line.translation?.trim();
+  const translationText = (line.translation ?? line.scene?.subtext)?.trim();
+  const kickerText = line.scene?.kicker?.trim().toUpperCase();
+  const activeColor = line.scene?.accent?.trim() || typography.activeColor;
 
   return {
     id: line.id,
     rows,
     opacity,
     translateX: translateX + (line.speaker === 'B' ? fontSizePx * 0.6 : 0),
-    translateY: translateY + scaleBase,
-    scale: karaoke.scale !== 1 ? 1 : 1,
+    translateY,
+    scale: scaleFactor,
     blurPx,
     clipWipe,
     isCurrent,
@@ -336,7 +395,7 @@ function buildLineFrame(
     letterSpacingPx,
     weight,
     color: style.color ?? typography.color,
-    activeColor: typography.activeColor,
+    activeColor,
     uppercase,
     align,
     outlineWidth: typography.outlineWidth * (scene.height / 1080),
@@ -345,6 +404,9 @@ function buildLineFrame(
     shadowColor: typography.shadowColor,
     shadowOffsetY: typography.shadowOffsetY * (scene.height / 1080),
     glow: karaoke.glow,
+    kicker: kickerText
+      ? { text: kickerText, opacity: opacity * 0.92, fontSizePx: Math.max(12, Math.round(fontSizePx * 0.36)) }
+      : null,
     translation: translationText
       ? { text: translationText, opacity: opacity * 0.85, fontSizePx: Math.round(fontSizePx * 0.42) }
       : null,
@@ -359,13 +421,14 @@ function transitionTransform(
   exitProgress: number,
   fontSizePx: number,
   intensity: number
-): { opacity: number; translateX: number; translateY: number; blurPx: number; scaleBase: number; clipWipe: number } {
+): { opacity: number; translateX: number; translateY: number; blurPx: number; scaleFactor: number; clipWipe: number } {
   const e = easeOutCubic(enterProgress);
   const x = easeInOutCubic(exitProgress);
   let opacity = e * (1 - x);
   let translateX = 0;
   let translateY = 0;
   let blurPx = 0;
+  let scaleFactor = 1;
   let clipWipe = 1;
 
   switch (enter) {
@@ -376,7 +439,7 @@ function transitionTransform(
       break;
     case 'clip':
       clipWipe = e;
-      opacity = Math.min(1, e * 2);
+      opacity = Math.min(1, e * 2) * (1 - x);
       break;
     case 'blur':
       blurPx += (1 - e) * fontSizePx * 0.28 * intensity;
@@ -384,8 +447,17 @@ function transitionTransform(
     case 'wordCascade':
       translateY += (1 - e) * fontSizePx * 0.3 * intensity;
       break;
+    case 'zoom':
+      scaleFactor = 1 - (1 - e) * 0.12 * intensity;
+      break;
+    case 'spring': {
+      const s = spring(enterProgress, 8.5, 0.85);
+      translateY += (1 - s) * fontSizePx * 0.5 * intensity;
+      scaleFactor = 0.94 + 0.06 * s;
+      break;
+    }
     case 'none':
-      opacity = enterProgress >= 1 ? 1 : 0;
+      opacity = enterProgress >= 1 ? 1 - x : 0;
       break;
   }
 
@@ -403,7 +475,7 @@ function transitionTransform(
       break;
   }
 
-  return { opacity: clamp01(opacity), translateX, translateY, blurPx, scaleBase: 0, clipWipe };
+  return { opacity: clamp01(opacity), translateX, translateY, blurPx, scaleFactor, clipWipe };
 }
 
 function separateOverlapping(lines: LineFrame[]): void {
@@ -421,8 +493,8 @@ function separateOverlapping(lines: LineFrame[]): void {
   }
 }
 
-function computeBackground(scene: Scene, musicTimeUs: Microseconds): BackgroundFrame {
-  const bg = scene.design.background;
+function computeBackground(scene: Scene, musicTimeUs: Microseconds, bgSpec?: BackgroundSpec): BackgroundFrame {
+  const bg = bgSpec ?? scene.design.background;
   const seconds = musicTimeUs / 1_000_000;
   const bands: number[] = [];
   let pulse = 0;
@@ -509,6 +581,7 @@ export function renderFrame(
   ctx.clearRect(0, 0, width, height);
 
   paintBackground(ctx, scene, state);
+  for (const block of state.blocks) paintBlock(ctx, scene, block);
   for (const line of state.lines) paintLine(ctx, scene, line, state);
   if (state.card) paintCard(ctx, scene, state.card);
   paintBrand(ctx, scene, state);
@@ -518,11 +591,31 @@ export function renderFrame(
   return state;
 }
 
-function paintBackground(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, scene: Scene, state: FrameState): void {
-  const { width, height } = scene;
-  const bg = state.background;
+function sourceDimensions(image: CanvasImageSource): { width: number; height: number } | null {
+  const rec = image as { width?: number | { baseVal?: { value?: number } }; height?: number | { baseVal?: { value?: number } }; videoWidth?: number; videoHeight?: number; naturalWidth?: number; naturalHeight?: number };
+  const w = rec.naturalWidth || rec.videoWidth || (typeof rec.width === 'number' ? rec.width : rec.width?.baseVal?.value) || 0;
+  const h = rec.naturalHeight || rec.videoHeight || (typeof rec.height === 'number' ? rec.height : rec.height?.baseVal?.value) || 0;
+  return w > 0 && h > 0 ? { width: w, height: h } : null;
+}
 
-  if (bg.kind === 'solid' || bg.stops.length === 0) {
+function paintBackgroundLayer(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  scene: Scene,
+  bg: BackgroundFrame
+): void {
+  const { width, height } = scene;
+  const bitmap = bg.kind === 'image' && bg.image.assetId ? scene.assets.images.get(bg.image.assetId) : undefined;
+  const dims = bitmap ? sourceDimensions(bitmap) : null;
+
+  if (bitmap && dims) {
+    // Cover-fit with deterministic Ken Burns pan & zoom.
+    const coverScale = Math.max(width / dims.width, height / dims.height) * Math.max(1, bg.image.scale);
+    const drawW = dims.width * coverScale;
+    const drawH = dims.height * coverScale;
+    const drawX = (width - drawW) / 2 + bg.image.translateX * width;
+    const drawY = (height - drawH) / 2 + bg.image.translateY * height;
+    ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
+  } else if (bg.kind === 'solid' || bg.stops.length === 0) {
     ctx.fillStyle = bg.stops[0]?.color ?? '#000000';
     ctx.fillRect(0, 0, width, height);
   } else if (bg.kind === 'mesh') {
@@ -551,10 +644,6 @@ function paintBackground(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderin
     ctx.fillRect(0, 0, width, height);
   }
 
-  if (bg.bands.length > 0 && scene.design.background.visualizerGain > 0) {
-    paintVisualizer(ctx, scene, bg.bands, scene.design.background.visualizerGain);
-  }
-
   if (bg.scrim > 0) {
     const scrim = ctx.createLinearGradient(0, 0, 0, height);
     scrim.addColorStop(0, `rgba(0,0,0,${bg.scrim * 0.5})`);
@@ -562,6 +651,49 @@ function paintBackground(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderin
     scrim.addColorStop(1, `rgba(0,0,0,${bg.scrim * 0.75})`);
     ctx.fillStyle = scrim;
     ctx.fillRect(0, 0, width, height);
+  }
+}
+
+function paintBackground(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, scene: Scene, state: FrameState): void {
+  const { width, height } = scene;
+  paintBackgroundLayer(ctx, scene, state.background);
+
+  if (state.backgroundOverlay && state.backgroundOverlay.progress > 0.001) {
+    const { frame: overlayBg, transition, progress } = state.backgroundOverlay;
+    const eased = easeInOutCubic(progress);
+    ctx.save();
+    switch (transition) {
+      case 'wipe':
+        ctx.beginPath();
+        ctx.rect(0, 0, width * eased, height);
+        ctx.clip();
+        paintBackgroundLayer(ctx, scene, overlayBg);
+        break;
+      case 'slide':
+        ctx.translate((1 - eased) * width, 0);
+        paintBackgroundLayer(ctx, scene, overlayBg);
+        break;
+      case 'zoom': {
+        const s = 1.12 - 0.12 * eased;
+        ctx.globalAlpha = eased;
+        ctx.translate(width / 2, height / 2);
+        ctx.scale(s, s);
+        ctx.translate(-width / 2, -height / 2);
+        paintBackgroundLayer(ctx, scene, overlayBg);
+        break;
+      }
+      case 'fade':
+      default:
+        ctx.globalAlpha = eased;
+        paintBackgroundLayer(ctx, scene, overlayBg);
+        break;
+    }
+    ctx.restore();
+  }
+
+  const activeBands = state.backgroundOverlay?.frame.bands.length ? state.backgroundOverlay.frame.bands : state.background.bands;
+  if (activeBands.length > 0 && scene.design.background.visualizerGain > 0) {
+    paintVisualizer(ctx, scene, activeBands, scene.design.background.visualizerGain);
   }
 }
 
@@ -590,7 +722,39 @@ function paintLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingConte
   ctx.save();
   ctx.globalAlpha = clamp01(line.opacity);
   ctx.translate(line.translateX, line.translateY);
+  if (line.scale !== 1) {
+    const cx = scene.width / 2;
+    const cy = scene.height / 2;
+    ctx.translate(cx, cy);
+    ctx.scale(line.scale, line.scale);
+    ctx.translate(-cx, -cy);
+  }
+  if (line.clipWipe < 0.999) {
+    ctx.beginPath();
+    ctx.rect(0, 0, scene.width * clamp01(line.clipWipe), scene.height);
+    ctx.clip();
+  }
   ctx.textBaseline = 'alphabetic';
+
+  if (line.kicker) {
+    const firstBaseline = line.rows[0]?.baselineY ?? scene.height / 2;
+    ctx.save();
+    ctx.globalAlpha = clamp01(line.kicker.opacity);
+    ctx.font = `700 ${line.kicker.fontSizePx}px ${fontStack}`;
+    if ('letterSpacing' in ctx) {
+      (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${Math.round(line.kicker.fontSizePx * 0.14)}px`;
+    }
+    ctx.fillStyle = line.activeColor;
+    ctx.textAlign = line.align;
+    const kx =
+      line.align === 'center'
+        ? scene.box.contentLeft + scene.box.contentWidth / 2
+        : line.align === 'right'
+          ? scene.box.contentLeft + scene.box.contentWidth
+          : scene.box.contentLeft;
+    ctx.fillText(line.kicker.text, kx, firstBaseline - line.fontSizePx * 1.12);
+    ctx.restore();
+  }
 
   const font = `${line.weight} ${line.fontSizePx}px ${fontStack}`;
   ctx.font = font;

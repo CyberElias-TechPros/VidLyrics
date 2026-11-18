@@ -14,7 +14,57 @@ export type Id = string;
  * ------------------------------------------------------------------ */
 
 /** Provenance of a timestamp. Drives confidence heat and undo semantics. */
-export type TimingSource = 'human' | 'align' | 'asr' | 'estimate' | 'tap';
+export type TimingSource = 'human' | 'align' | 'asr' | 'estimate' | 'tap' | 'tts';
+
+export type SceneLayout = 'caption' | 'title' | 'stat' | 'bullets' | 'quote' | 'code' | 'chart';
+
+export type SceneTransition = 'fade' | 'wipe' | 'slide' | 'zoom' | 'none';
+
+export type EnterMotion = 'fade' | 'rise' | 'clip' | 'blur' | 'wordCascade' | 'zoom' | 'spring' | 'none';
+
+export type ExitMotion = 'fade' | 'sink' | 'blur' | 'none';
+
+export interface ChartDatum {
+  label: string;
+  value: number;
+  color?: string;
+}
+
+/**
+ * Optional programmatic visual spec for a single scene/line.
+ *
+ * Lines without `scene` render as standard lyric captions, preserving 100%
+ * backwards compatibility with v1/v2 projects while letting code-authored and
+ * script-to-video projects drive multi-scene layouts, data charts, code cards,
+ * per-scene backgrounds and transitions on the exact same timeline.
+ */
+export interface SceneVisual {
+  layout?: SceneLayout;
+  /** Eyebrow label above the headline, or filename/language tag for `code`. */
+  kicker?: string;
+  /** Supporting caption, subtitle, or quote attribution. */
+  subtext?: string;
+  /** Hero metric for `stat` layout (e.g. "100%", "$0", "10x"). */
+  value?: string;
+  /** List items for `bullets` layout, or code lines for `code` layout. */
+  items?: string[];
+  /** Data bars for `chart` layout, animated across the scene duration. */
+  chart?: ChartDatum[];
+  /** Per-scene background override (solid, gradient, mesh, image, visualizer). */
+  background?: Partial<Pick<BackgroundSpec, 'kind' | 'assetId' | 'colors' | 'motion' | 'scrim'>>;
+  /** Per-scene entrance motion override. */
+  enter?: EnterMotion;
+  /** Per-scene exit motion override. */
+  exit?: ExitMotion;
+  /** Transition applied when switching into this scene's background. */
+  transition?: SceneTransition;
+  /** Optional explicit spoken narration for local TTS (defaults to derived scene copy). */
+  narration?: string;
+  /** Optional language label for `code` scenes (e.g. `ts`, `json`, `bash`). */
+  language?: string;
+  /** Optional accent colour override for badges, dividers, bullets and bars. */
+  accent?: string;
+}
 
 export interface Word {
   id: Id;
@@ -42,6 +92,8 @@ export interface Line {
   locked: boolean;
   /** Per-line override, merged over the theme defaults. */
   style: Partial<LineStyle>;
+  /** Optional programmatic scene layout, data and background override. */
+  scene?: SceneVisual;
   /** Optional second voice (duet / call-and-response). */
   speaker: 'A' | 'B' | null;
   /** Optional translated/romanised companion line, rendered beneath. */
@@ -143,8 +195,8 @@ export interface KaraokeSpec {
 }
 
 export interface MotionSpec {
-  enter: 'fade' | 'rise' | 'clip' | 'blur' | 'wordCascade' | 'none';
-  exit: 'fade' | 'sink' | 'blur' | 'none';
+  enter: EnterMotion;
+  exit: ExitMotion;
   /** Duration in microseconds for enter/exit transitions. */
   enterUs: Microseconds;
   exitUs: Microseconds;
@@ -219,6 +271,8 @@ export interface AssetRecord {
   createdAt: number;
 }
 
+export type VoiceoverMode = 'timed' | 'sequential';
+
 /** Local, generated voiceover audio and its reproducible mix settings. */
 export interface VoiceoverMeta {
   assetId: Id;
@@ -229,6 +283,12 @@ export interface VoiceoverMeta {
   sampleRate: number;
   durationUs: Microseconds;
   voiceId: string;
+  /** Optional second voice used for lines assigned to speaker 'B'. */
+  voiceIdB?: string | null;
+  /** Whether speech followed existing cue starts ('timed') or timed the script ('sequential'). */
+  mode?: VoiceoverMode;
+  /** Inter-scene pause in ms used when `mode === 'sequential'`. */
+  pauseMs?: number;
   /** Signature of lyric order, text and starts used to synthesize this track. */
   sourceSignature: string;
   enabled: boolean;
@@ -264,7 +324,7 @@ export interface ExportSettings {
  * PROJECT
  * ------------------------------------------------------------------ */
 
-export type LyricSource = 'user' | 'file' | 'asr' | 'empty';
+export type LyricSource = 'user' | 'file' | 'asr' | 'script' | 'spec' | 'empty';
 
 export interface LyricsState {
   source: LyricSource;

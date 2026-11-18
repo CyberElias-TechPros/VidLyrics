@@ -1,4 +1,4 @@
-import { seekTo } from '../../media/session';
+import { projectTimelineDurationUs, seekTo } from '../../media/session';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../state/store';
 import { decimate } from '../../core/audio/peaks';
@@ -26,9 +26,9 @@ const TRACK_GAP = 4;
 
 export function Timeline() {
   const peaks = useEditor((s) => s.peaks);
-  const lines = useEditor((s) => s.project.lyrics.lines);
-  const durationUs = useEditor((s) => s.project.audio?.durationUs ?? 0);
-  const zoom = useEditor((s) => s.project.ui.zoomPxPerSecond);
+  const project = useEditor((s) => s.project);
+  const lines = project.lyrics.lines;
+  const zoom = project.ui.zoomPxPerSecond;
   const setZoom = useEditor((s) => s.setZoom);
   const playheadUs = useEditor((s) => s.playheadUs);
   const selectedIds = useEditor((s) => s.selectedIds);
@@ -43,7 +43,8 @@ export function Timeline() {
   const dragRef = useRef<DragMode>({ kind: 'none' });
   const [dragging, setDragging] = useState(false);
 
-  const totalUs = Math.max(durationUs, lines.reduce((max, l) => Math.max(max, l.end), 0), usFromMs(1000));
+  const introOffset = project.audio ? 0 : project.design.intro.enabled ? project.design.intro.durationUs : 0;
+  const totalUs = Math.max(projectTimelineDurationUs(project), usFromMs(1000));
   const pxPerUs = zoom / 1_000_000;
   const widthPx = Math.max(600, Math.round(usToMs(totalUs) * (zoom / 1000)));
 
@@ -66,14 +67,21 @@ export function Timeline() {
     if (!peaks) {
       ctx.fillStyle = 'rgba(255,255,255,0.04)';
       ctx.fillRect(0, height / 2 - 1, widthPx, 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      ctx.font = '12px ui-monospace, monospace';
-      ctx.fillText('Import audio to see the waveform', 12, height / 2 - 10);
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.font = '11px ui-monospace, monospace';
+      const label =
+        lines.length > 0
+          ? 'Scene timeline · sync local TTS or add background audio for waveform'
+          : 'Import audio, paste a script, or load a code template';
+      ctx.fillText(label, 12, height / 2 - 10);
       return;
     }
 
     const midY = height / 2;
-    const samples = decimate(peaks, 0, totalUs, widthPx);
+    const waveStartPx = Math.round(introOffset * pxPerUs);
+    const waveDurationUs = introOffset > 0 ? peaks.durationUs : totalUs;
+    const waveWidthPx = Math.max(1, Math.min(widthPx - waveStartPx, Math.round(waveDurationUs * pxPerUs)));
+    const samples = decimate(peaks, 0, waveDurationUs, waveWidthPx);
     const peak = Math.max(0.001, peaks.peakAmplitude);
 
     ctx.fillStyle = 'rgba(255,180,84,0.75)';
@@ -82,7 +90,7 @@ export function Timeline() {
       if (!sample) continue;
       const top = midY - (Math.abs(sample.max) / peak) * (midY - 2);
       const bottom = midY + (Math.abs(sample.min) / peak) * (midY - 2);
-      ctx.fillRect(x, top, 1, Math.max(1, bottom - top));
+      ctx.fillRect(waveStartPx + x, top, 1, Math.max(1, bottom - top));
     }
     // RMS overlay: the perceived loudness shape, drawn over the transient peaks.
     ctx.fillStyle = 'rgba(139,124,255,0.45)';
@@ -90,7 +98,7 @@ export function Timeline() {
       const sample = samples[x];
       if (!sample) continue;
       const h = Math.max(1, (sample.rms / peak) * (midY - 2));
-      ctx.fillRect(x, midY - h, 1, h * 2);
+      ctx.fillRect(waveStartPx + x, midY - h, 1, h * 2);
     }
 
     if (beatGrid && beatGrid.confidence > 0.25) {
@@ -101,7 +109,7 @@ export function Timeline() {
         ctx.fillRect(x, 0, 1, height);
       }
     }
-  }, [peaks, widthPx, totalUs, pxPerUs, beatGrid]);
+  }, [peaks, widthPx, totalUs, pxPerUs, beatGrid, introOffset, lines.length]);
 
   /* ------------------------- interactions ------------------------- */
 
@@ -138,7 +146,7 @@ export function Timeline() {
       return;
     }
     if (mode.kind === 'trim') {
-      setLineTime(mode.lineId, mode.edge, timeUs);
+      setLineTime(mode.lineId, mode.edge, Math.max(0, timeUs - introOffset));
     }
   };
 
@@ -216,7 +224,7 @@ export function Timeline() {
         <span aria-hidden="true">·</span>
         <span className="mono">{formatClock(totalUs)}</span>
         <span aria-hidden="true">·</span>
-        <span>{sortedLines.length} lines</span>
+        <span>{sortedLines.length} {sortedLines.length === 1 ? 'scene' : 'scenes'}</span>
         {beatGrid ? (
           <>
             <span aria-hidden="true">·</span>
@@ -264,10 +272,20 @@ export function Timeline() {
           {/* Lyric blocks */}
           <div style={{ position: 'relative', padding: '4px 0' }}>
             {sortedLines.map((line, index) => {
-              const left = line.start * pxPerUs;
+              const left = (introOffset + line.start) * pxPerUs;
               const width = Math.max(6, (line.end - line.start) * pxPerUs);
-              const conf = line.words.length === 0 ? (line.source === 'human' || line.source === 'tap' ? 'high' : 'low') : line.words.reduce((min, w) => Math.min(min, w.confidence), 1) > 0.7 ? 'high' : line.words.reduce((min, w) => Math.min(min, w.confidence), 1) > 0.35 ? 'mid' : 'low';
-              const isCurrent = playheadUs >= line.start && playheadUs <= line.end;
+              const conf =
+                line.words.length === 0
+                  ? line.source === 'human' || line.source === 'tap' || line.source === 'tts'
+                    ? 'high'
+                    : 'low'
+                  : line.words.reduce((min, w) => Math.min(min, w.confidence), 1) > 0.7
+                    ? 'high'
+                    : line.words.reduce((min, w) => Math.min(min, w.confidence), 1) > 0.35
+                      ? 'mid'
+                      : 'low';
+              const isCurrent = playheadUs >= introOffset + line.start && playheadUs <= introOffset + line.end;
+              const layoutBadge = line.scene?.layout && line.scene.layout !== 'caption' ? line.scene.layout : null;
               return (
                 <div
                   key={line.id}
@@ -275,9 +293,10 @@ export function Timeline() {
                   data-selected={selectedIds.includes(line.id) ? 'true' : 'false'}
                   data-current={isCurrent ? 'true' : 'false'}
                   data-conf={showHeat ? conf : undefined}
+                  data-layout={layoutBadge ?? undefined}
                   tabIndex={0}
                   role="button"
-                  aria-label={`${line.text || 'empty line'}, ${formatClock(line.start)} to ${formatClock(line.end)}`}
+                  aria-label={`${line.text || 'empty scene'}, ${formatClock(line.start)} to ${formatClock(line.end)}`}
                   style={{
                     left,
                     width,
@@ -290,11 +309,12 @@ export function Timeline() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      seekTo(line.start);
+                      seekTo(introOffset + line.start);
                     }
                   }}
                 >
                   <span className="ed-block-handle left" onPointerDown={(e) => startLineDrag(e, line, 'start')} aria-hidden="true" />
+                  {layoutBadge ? <span className="ed-block-badge">{layoutBadge}</span> : null}
                   {line.text || <em style={{ opacity: 0.4 }}>empty</em>}
                   <span className="ed-block-handle right" onPointerDown={(e) => startLineDrag(e, line, 'end')} aria-hidden="true" />
                 </div>

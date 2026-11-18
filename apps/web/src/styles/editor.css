@@ -604,6 +604,162 @@
 .ed-aspect i { display: block; border: 1px solid var(--text-faint); border-radius: 1px; }
 .ed-aspect span { font-size: 0.66rem; color: var(--text-dim); }
 
+/* ---------- script & video-as-code ---------- */
+
+.ed-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+}
+.ed-seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  padding: 5px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ed-seg-btn:hover { color: var(--text); }
+.ed-seg-btn[aria-pressed='true'] {
+  background: var(--ink-500);
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.ed-check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ed-check-inline input { accent-color: var(--amber); }
+
+.ed-code-editor {
+  width: 100%;
+  min-height: 290px;
+  max-height: 56svh;
+  resize: vertical;
+  background: var(--ink-900);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-1);
+  padding: 10px 11px;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.ed-code-editor:focus { border-color: var(--amber); outline: none; }
+.ed-code-editor[data-invalid='true'] { border-color: var(--danger); }
+
+.ed-code-status {
+  font-size: 0.68rem;
+  padding: 2px 6px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.ed-code-status[data-state='valid'] { border-color: rgba(102, 224, 163, 0.35); color: var(--conf-high); }
+.ed-code-status[data-state='invalid'] { border-color: rgba(255, 107, 129, 0.45); color: var(--danger); }
+
+.ed-code-issues {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  display: grid;
+  gap: 5px;
+  max-height: 130px;
+  overflow-y: auto;
+  background: rgba(255, 107, 129, 0.06);
+  border: 1px solid rgba(255, 107, 129, 0.35);
+  border-radius: var(--r-1);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.ed-code-issues li { display: flex; flex-wrap: wrap; gap: 6px; line-height: 1.4; }
+.ed-code-issues .mono { color: var(--danger); font-size: 0.69rem; }
+
+.ed-snippet-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ed-snippet-btn {
+  border: 1px solid var(--line);
+  background: var(--ink-700);
+  color: var(--text-dim);
+  border-radius: var(--r-1);
+  padding: 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.ed-snippet-btn:hover { border-color: var(--amber); color: var(--text); }
+
+.ed-template-list { display: grid; gap: 6px; }
+.ed-template-card {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 9px 10px;
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ed-template-card:hover { border-color: var(--amber); background: var(--ink-600, var(--ink-700)); }
+.ed-template-card strong { font-size: 0.78rem; }
+.ed-template-badge {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--amber);
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  padding: 1px 5px;
+}
+
+.ed-line-time-btn {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.ed-line-time-btn:hover { color: var(--amber); }
+
+.ed-block-badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(255, 180, 84, 0.18);
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: baseline;
+  line-height: 14px;
+}
+
 /* ---------- legal / docs prose ---------- */
 
 .prose {

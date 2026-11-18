@@ -1,4 +1,4 @@
-import type { Design, Line, Microseconds, Project, Word } from '../types';
+import type { Design, Line, Microseconds, Project, SceneVisual, Word } from '../types';
 import { getAspect } from '../design/tokens';
 import type { SpectrumEnvelope } from '../audio/spectrum';
 import type { BeatGrid } from '../audio/beats';
@@ -29,6 +29,8 @@ export interface SceneLine {
   /** Lowest per-word confidence on the line — drives the editor's heat display. */
   minConfidence: number;
   style: Line['style'];
+  /** Optional programmatic scene layout, data and background override. */
+  scene?: SceneVisual;
 }
 
 export interface SceneAssets {
@@ -150,8 +152,9 @@ export function buildScene(project: Project, options: BuildSceneOptions = {}): S
   const { width, height } = compositionSize(project.design);
   const box = contentBox(width, height, project.design);
   const audioDuration = project.audio?.durationUs ?? 0;
+  const voiceoverDuration = project.voiceover?.enabled ? project.voiceover.durationUs : 0;
   const lastLineEnd = project.lyrics.lines.reduce((max, l) => Math.max(max, l.end), 0);
-  const tail = Math.max(0, audioDuration, lastLineEnd);
+  const tail = Math.max(0, audioDuration, voiceoverDuration, lastLineEnd);
 
   const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
   const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
@@ -178,8 +181,14 @@ export function buildScene(project: Project, options: BuildSceneOptions = {}): S
       speaker: l.speaker,
       translation: l.translation,
       locked: l.locked,
-      minConfidence: l.words.length > 0 ? Math.min(...l.words.map((w) => w.confidence)) : l.source === 'human' || l.source === 'tap' ? 1 : 0.3,
-      style: l.style
+      minConfidence:
+        l.words.length > 0
+          ? Math.min(...l.words.map((w) => w.confidence))
+          : l.source === 'human' || l.source === 'tap' || l.source === 'tts'
+            ? 1
+            : 0.3,
+      style: l.style,
+      scene: l.scene
     }))
     .sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
 

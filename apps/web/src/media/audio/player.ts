@@ -56,6 +56,9 @@ export class PlaybackEngine {
   private musicMixGain = 1;
   private speechMixGain = 0;
   private startedAt = 0;
+  private wallStartedMs = 0;
+  private clockKind: 'audio' | 'wall' = 'audio';
+  private virtualDurationUs: Microseconds = 0;
   private seekOffsetUs: Microseconds = 0;
   private state: PlaybackState = 'idle';
   private rafId: number | null = null;
@@ -66,7 +69,17 @@ export class PlaybackEngine {
   constructor(private events: PlayerEvents = {}) {}
 
   get durationUs(): Microseconds {
-    return this.buffer ? usFromSeconds(this.buffer.duration) : 0;
+    const musicUs = this.buffer ? usFromSeconds(this.buffer.duration) : 0;
+    const voiceUs =
+      this.voiceBuffer && this.speechMixGain > 0
+        ? Math.max(0, this.voiceTimelineOffsetUs) + usFromSeconds(this.voiceBuffer.duration)
+        : 0;
+    return Math.max(musicUs, voiceUs, this.virtualDurationUs);
+  }
+
+  /** Set composition timeline length for script-only / silent / intro+outro playback. */
+  setVirtualDuration(durationUs: Microseconds): void {
+    this.virtualDurationUs = Number.isFinite(durationUs) ? Math.max(0, Math.round(durationUs)) : 0;
   }
 
   get currentState(): PlaybackState {
@@ -217,37 +230,64 @@ export class PlaybackEngine {
 
   /** Returns false when the browser refused to start (needs a gesture). */
   async play(fromUs?: Microseconds): Promise<boolean> {
-    if (!this.buffer || !this.context || !this.gain) return false;
+    const hasMusic = this.buffer !== null;
+    const hasVoice = this.voiceBuffer !== null && this.speechMixGain > 0;
+    const totalUs = this.durationUs;
+    if (totalUs <= 0) return false;
+
+    this.stopSource();
+    const rawStart = fromUs ?? this.seekOffsetUs;
+    // Pressing Play at the very end restarts cleanly from 0.
+    const start = rawStart >= totalUs - 20_000 && fromUs === undefined ? 0 : rawStart;
+    const clamped = Math.max(0, Math.min(start, totalUs));
+    this.seekOffsetUs = clamped;
+
+    // Silent timeline playback: script/code scenes with no audio buffer yet.
+    if (!hasMusic && !hasVoice) {
+      this.clockKind = 'wall';
+      this.wallStartedMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      this.setState('playing');
+      this.startTicker();
+      return true;
+    }
+
     try {
       await this.ensureContext();
     } catch {
       this.setState('blocked');
       return false;
     }
-    if (this.context.state !== 'running') {
+    if (!this.context || this.context.state !== 'running') {
       this.setState('blocked');
       return false;
     }
 
-    this.stopSource();
-    const start = fromUs ?? this.seekOffsetUs;
-    const clamped = Math.max(0, Math.min(start, this.durationUs));
-    this.seekOffsetUs = clamped;
+    if (hasMusic && this.buffer && this.gain) {
+      const musicDurUs = usFromSeconds(this.buffer.duration);
+      if (clamped < musicDurUs) {
+        const source = this.context.createBufferSource();
+        source.buffer = this.buffer;
+        source.playbackRate.value = this.rate;
+        source.connect(this.gain);
+        source.onended = () => {
+          if (this.source !== source) return;
+          this.source = null;
+          // Stop immediately unless voiceover or an outro card still extends past the song.
+          if (this.positionUs >= this.durationUs - 40_000) {
+            this.stopSource();
+            this.seekOffsetUs = this.durationUs;
+            this.setState('paused');
+            this.stopTicker();
+            this.events.onEnded?.();
+          }
+        };
+        source.start(0, usToSeconds(clamped));
+        this.source = source;
+      }
+    }
 
-    const source = this.context.createBufferSource();
-    source.buffer = this.buffer;
-    source.playbackRate.value = this.rate;
-    source.connect(this.gain);
-    source.onended = () => {
-      if (this.source !== source) return;
-      this.stopSource();
-      this.setState('paused');
-      this.stopTicker();
-      this.events.onEnded?.();
-    };
-    source.start(0, usToSeconds(clamped));
-    this.source = source;
     this.startVoiceoverSource(clamped);
+    this.clockKind = 'audio';
     this.startedAt = this.context.currentTime;
     this.setState('playing');
     this.startTicker();
@@ -310,8 +350,13 @@ export class PlaybackEngine {
    * tap-sync needs — it is sampled at the moment of the keypress.
    */
   get positionUs(): Microseconds {
-    if (!this.context) return this.seekOffsetUs;
     if (this.state !== 'playing') return this.seekOffsetUs;
+    if (this.clockKind === 'wall') {
+      const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const elapsedUs = Math.max(0, (nowMs - this.wallStartedMs) * 1000 * this.rate);
+      return Math.max(0, Math.min(this.durationUs, this.seekOffsetUs + elapsedUs));
+    }
+    if (!this.context) return this.seekOffsetUs;
     const elapsedUs = usFromSeconds((this.context.currentTime - this.startedAt) * this.rate);
     return Math.max(0, Math.min(this.durationUs, this.seekOffsetUs + elapsedUs));
   }
@@ -323,6 +368,14 @@ export class PlaybackEngine {
       this.events.onTick?.(position);
       if (this.loop && position >= this.loop.endUs) {
         void this.play(this.loop.startUs);
+        return;
+      }
+      if (this.durationUs > 0 && position >= this.durationUs) {
+        this.stopSource();
+        this.seekOffsetUs = this.durationUs;
+        this.setState('paused');
+        this.stopTicker();
+        this.events.onEnded?.();
         return;
       }
       if (this.state === 'playing') this.rafId = requestAnimationFrame(tick);

@@ -12,6 +12,44 @@ import { z } from 'zod';
  */
 
 const microseconds = z.number().finite().nonnegative();
+const timingSourceSchema = z.enum(['human', 'align', 'asr', 'estimate', 'tap', 'tts']);
+const enterMotionSchema = z.enum(['fade', 'rise', 'clip', 'blur', 'wordCascade', 'zoom', 'spring', 'none']);
+const exitMotionSchema = z.enum(['fade', 'sink', 'blur', 'none']);
+const colorOrEmpty = z.string().max(64);
+
+const chartDatumSchema = z.object({
+  label: z.string().min(1).max(120),
+  value: z.number().finite().min(0).max(1_000_000_000),
+  color: colorOrEmpty.optional()
+});
+
+const sceneBackgroundOverrideSchema = z
+  .object({
+    kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer']).optional(),
+    assetId: z.string().max(128).nullable().optional(),
+    colors: z.array(colorOrEmpty).min(1).max(8).optional(),
+    motion: z.number().min(0).max(2).optional(),
+    scrim: z.number().min(0).max(1).optional()
+  })
+  .partial();
+
+export const sceneVisualSchema = z
+  .object({
+    layout: z.enum(['caption', 'title', 'stat', 'bullets', 'quote', 'code', 'chart']).optional(),
+    kicker: z.string().max(160).optional(),
+    subtext: z.string().max(600).optional(),
+    value: z.string().max(80).optional(),
+    items: z.array(z.string().max(400)).max(24).optional(),
+    chart: z.array(chartDatumSchema).max(12).optional(),
+    background: sceneBackgroundOverrideSchema.optional(),
+    enter: enterMotionSchema.optional(),
+    exit: exitMotionSchema.optional(),
+    transition: z.enum(['fade', 'wipe', 'slide', 'zoom', 'none']).optional(),
+    narration: z.string().max(4000).optional(),
+    language: z.string().max(48).optional(),
+    accent: colorOrEmpty.optional()
+  })
+  .partial();
 
 const wordSchema = z.object({
   id: z.string().min(1).max(128),
@@ -20,7 +58,7 @@ const wordSchema = z.object({
   start: microseconds,
   end: microseconds,
   confidence: z.number().min(0).max(1),
-  source: z.enum(['human', 'align', 'asr', 'estimate', 'tap']),
+  source: timingSourceSchema,
   locked: z.boolean()
 });
 
@@ -41,9 +79,11 @@ const lineSchema = z.object({
       align: z.enum(['left', 'center', 'right']).optional()
     })
     .partial(),
+  scene: sceneVisualSchema.optional(),
   speaker: z.enum(['A', 'B']).nullable(),
   translation: z.string().max(4000).nullable(),
-  source: z.enum(['human', 'align', 'asr', 'estimate', 'tap'])
+  source: timingSourceSchema,
+  confidence: z.number().min(0).max(1).optional()
 });
 
 const sectionSchema = z.object({
@@ -55,8 +95,6 @@ const sectionSchema = z.object({
   label: z.string().max(64),
   occurrence: z.number().int().min(0).max(999)
 });
-
-const colorOrEmpty = z.string().max(64);
 
 const backgroundSchema = z.object({
   kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer']),
@@ -96,8 +134,8 @@ const karaokeSchema = z.object({
 });
 
 const motionSchema = z.object({
-  enter: z.enum(['fade', 'rise', 'clip', 'blur', 'wordCascade', 'none']),
-  exit: z.enum(['fade', 'sink', 'blur', 'none']),
+  enter: enterMotionSchema,
+  exit: exitMotionSchema,
   enterUs: microseconds,
   exitUs: microseconds,
   overlapUs: microseconds,
@@ -154,6 +192,9 @@ const voiceoverSchema = z.object({
   sampleRate: z.number().int().positive(),
   durationUs: microseconds,
   voiceId: z.string().min(1).max(128),
+  voiceIdB: z.string().min(1).max(128).nullable().optional(),
+  mode: z.enum(['timed', 'sequential']).optional(),
+  pauseMs: z.number().int().min(0).max(10_000).optional(),
   sourceSignature: z.string().min(1).max(128),
   enabled: z.boolean(),
   musicGain: z.number().min(0).max(2),
@@ -191,7 +232,7 @@ export const projectSchema = z.object({
   audio: audioSchema.nullable(),
   voiceover: voiceoverSchema.nullable(),
   lyrics: z.object({
-    source: z.enum(['user', 'file', 'asr', 'empty']),
+    source: z.enum(['user', 'file', 'asr', 'script', 'spec', 'empty']),
     originalText: z.string().max(200_000),
     originalFileName: z.string().max(512).nullable(),
     lines: z.array(lineSchema).max(5000)
