@@ -13,7 +13,7 @@ import {
   seekTo
 } from '../../media/session';
 import { formatClock, usFromMs } from '../../core/time';
-import PIPER_VOICES from '../../../model-voices.json';
+import { bundledVoice, DEFAULT_VOICE_B } from '../../core/audio/voices';
 
 function isGenerationBusy(state: string): boolean {
   return ['PREPARING', 'DOWNLOADING', 'LOADING', 'RUNNING', 'SAVING'].includes(state);
@@ -175,13 +175,8 @@ export function CodePanel() {
 
   const syncSpeechFromSpec = () => {
     const voicePrefs = readProjectVoicePrefs(project);
-    const defaultVoice = PIPER_VOICES[0]?.id ?? 'en_US-lessac-medium';
-    const validIds = new Set(PIPER_VOICES.map((v) => v.id));
-    const voiceId = voicePrefs?.voiceId && validIds.has(voicePrefs.voiceId) ? voicePrefs.voiceId : defaultVoice;
-    const voiceIdB =
-      voicePrefs?.voiceIdB && validIds.has(voicePrefs.voiceIdB)
-        ? voicePrefs.voiceIdB
-        : (PIPER_VOICES[2]?.id ?? null);
+    const voiceId = bundledVoice(voicePrefs?.voiceId);
+    const voiceIdB = bundledVoice(voicePrefs?.voiceIdB, DEFAULT_VOICE_B);
     void generateVoiceover(voiceId, {
       mode: 'sequential',
       pauseMs: voicePrefs?.pauseMs ?? 300,

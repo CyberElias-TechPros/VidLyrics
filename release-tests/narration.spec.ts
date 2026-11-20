@@ -1,23 +1,23 @@
 import { expect, test } from '@playwright/test';
 
-test('real Ryan synthesis survives reopen and is audible inside the exported MP4', async ({ page }) => {
+test('default Norman synthesis survives reopen and is audible inside the exported MP4', async ({ page }) => {
   const button = (name: string) => page.getByRole('button', { name, exact: true });
   const ready = page.getByRole('heading', { name: 'Voiceover ready' });
   await page.goto('/app');
   await button('Script to video').click();
   await page.locator('#lyric-paste').fill(JSON.stringify({
     title: 'Narration release check', aspect: 'custom', customSize: { width: 320, height: 568 },
-    fps: 12, voice: { voiceId: 'en_US-ryan-medium', pauseMs: 300 },
+    fps: 12,
     scenes: [
       { text: 'The turning point', narration: 'The verdict does not have to define you.' },
       { layout: 'quote', kicker: 'YOUR NEXT STEP', text: 'Walk in grace.', narration: 'Take the next faithful step.' }
     ], outro: { title: 'Walk in Grace', subtitle: 'Thanks for watching.', duration: 2.5 }
   }));
-  await button('Apply video spec').click();
-  await button('Generate & sync speech').click();
+  await button('Apply & narrate').click();
   // Surface model/storage errors immediately instead of waiting out a timeout.
   await expect(ready.or(page.locator('.ed-generation-error')).first()).toBeVisible({ timeout: 120_000 });
   await expect(ready).toBeVisible();
+  await expect(page.getByText(/Generated with en_US-norman-medium/)).toBeVisible();
   await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
   await page.reload();
   await button('Projects').click();
@@ -62,4 +62,15 @@ test('real Ryan synthesis survives reopen and is audible inside the exported MP4
   expect(stats.videoDuration).toBeGreaterThan(3);
   expect(Math.abs(stats.audioDuration - stats.videoDuration)).toBeLessThan(0.15);
   expect(stats.bright).toBeGreaterThan(100);
+});
+
+test('build and narrate generates speech directly from a plain script', async ({ page }) => {
+  await page.goto('/app');
+  await page.getByRole('button', { name: 'Script to video', exact: true }).click();
+  await page.locator('#lyric-paste').fill('One voice and no microphone. Each scene gets its own timing.');
+  await page.getByRole('button', { name: 'Build & narrate', exact: true }).click();
+  const ready = page.getByRole('heading', { name: 'Voiceover ready' });
+  await expect(ready.or(page.locator('.ed-generation-error')).first()).toBeVisible({ timeout: 120_000 });
+  await expect(ready).toBeVisible();
+  await expect(page.getByText(/Generated with en_US-norman-medium/)).toBeVisible();
 });

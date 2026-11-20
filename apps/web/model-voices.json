@@ -1,4 +1,6 @@
 [
+  { "id": "en_US-norman-medium", "label": "English (US) · Norman · public-domain model" },
+  { "id": "en_US-ljspeech-medium", "label": "English (US) · LJSpeech · public-domain model" },
   { "id": "en_US-lessac-medium", "label": "English (US) · Lessac" },
   { "id": "en_US-amy-medium", "label": "English (US) · Amy" },
   { "id": "en_US-ryan-medium", "label": "English (US) · Ryan" },

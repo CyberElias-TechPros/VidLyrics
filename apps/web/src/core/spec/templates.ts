@@ -1,3 +1,4 @@
+import { DEFAULT_VOICE, DEFAULT_VOICE_B, PIPER_VOICES } from '../audio/voices';
 import type { SceneLayout } from '../types';
 import { VIDEO_SPEC_VERSION, type SpecScene, type VideoSpec } from './schema';
 
@@ -24,7 +25,7 @@ export const VIDEO_TEMPLATES: VideoTemplate[] = [
       aspect: '16:9',
       fps: 30,
       voice: {
-        voiceId: 'en_US-lessac-medium',
+        voiceId: DEFAULT_VOICE,
         pauseMs: 300,
         wpm: 155
       },
@@ -131,7 +132,7 @@ export const VIDEO_TEMPLATES: VideoTemplate[] = [
       theme: 'neon-circuit',
       aspect: '9:16',
       fps: 30,
-      voice: { voiceId: 'en_US-amy-medium', pauseMs: 220, wpm: 168 },
+      voice: { voiceId: DEFAULT_VOICE_B, pauseMs: 220, wpm: 168 },
       scenes: [
         {
           id: 'reel_1',
@@ -275,8 +276,8 @@ export const VIDEO_TEMPLATES: VideoTemplate[] = [
       fps: 30,
       karaoke: 'word',
       voice: {
-        voiceId: 'en_US-lessac-medium',
-        voiceIdB: 'en_US-ryan-medium',
+        voiceId: DEFAULT_VOICE,
+        voiceIdB: DEFAULT_VOICE_B,
         pauseMs: 360,
         wpm: 155
       },
@@ -343,7 +344,7 @@ export const VIDEO_TEMPLATES: VideoTemplate[] = [
       theme: 'nocturne',
       aspect: '16:9',
       fps: 30,
-      voice: { voiceId: 'en_US-ryan-medium', pauseMs: 320, wpm: 150 },
+      voice: { voiceId: DEFAULT_VOICE, pauseMs: 320, wpm: 150 },
       scenes: [
         {
           id: 'dev_1',
@@ -516,8 +517,8 @@ export function buildAiSpecPrompt(): string {
   "aspect": "16:9 | 9:16 | 1:1 | 4:5 | 4:3",
   "fps": 30,
   "voice": {
-    "voiceId": "en_US-lessac-medium | en_US-amy-medium | en_US-ryan-medium | en_GB-alan-medium | es_ES-davefx-medium | fr_FR-siwis-medium | de_DE-thorsten-medium | pt_BR-faber-medium | zh_CN-huayan-medium | sw_CD-lanfrica-medium",
-    "voiceIdB": "optional second Piper voice for speaker B",
+    "voiceId": "${DEFAULT_VOICE}",
+    "voiceIdB": "${DEFAULT_VOICE_B}",
     "pauseMs": 300,
     "wpm": 155
   },
@@ -543,6 +544,7 @@ export function buildAiSpecPrompt(): string {
 }
 
 Guidelines:
+- Use ${DEFAULT_VOICE} for US English narration or ${DEFAULT_VOICE_B} for a female US voice. Both models are public domain. Other bundled IDs if requested: ${PIPER_VOICES.map(v => v.id).join(', ')}.
 - Split the script into punchy 3–6 second scenes mixing \`title\`, \`bullets\`, \`stat\`, \`chart\`, \`code\`, \`quote\`, and \`caption\` layouts where they fit naturally.
 - Use \`"duration": "auto"\` so VidLyrics's local Piper TTS can auto-sync exact scene durations to spoken voiceover.
 - Put words viewers should see in "text" or "subtext". "narration" is for speech only. Split long passages across scenes instead of crowding a card.

@@ -33,9 +33,9 @@ const SECTIONS = [
     title: 'Turn an AI script into a narrated video',
     body: (
       <ol>
-        <li>Choose <strong>Script to video</strong> in the studio. Paste a complete VidLyrics JSON spec and choose <strong>Apply video spec</strong>. No audio file is needed. Plain prose still uses <strong>Build scenes</strong>.</li>
+        <li>Choose <strong>Script to video</strong> in the studio. Paste a complete VidLyrics JSON spec and choose <strong>Apply &amp; narrate</strong>, or paste plain prose and choose <strong>Build &amp; narrate</strong>. VidLyrics generates speech locally and times each scene to it. No microphone or audio file is needed.</li>
         <li>Check the scene count and click scenes on the timeline to preview them. The headline, kicker, subtext, bullets and chart labels are visual; <code>narration</code> is the spoken script. To edit it without JSON, expand the selected scene’s layout controls.</li>
-        <li>For a voiced video, choose <strong>Auto-time scenes to speech</strong> and <strong>Generate &amp; sync speech</strong>. Before synthesis, automatic timings are estimates. Without a song or generated speech, the video is silent.</li>
+        <li>If you applied scenes without narration, choose <strong>Auto-time scenes to speech</strong> and <strong>Generate &amp; sync speech</strong>. Before synthesis, automatic timings are estimates. Without a song or generated speech, the video is silent.</li>
         <li>Preview the outro, then export. Use <strong>Projects</strong> to reopen local work or export the project to keep a backup. If a spec fails validation, correct the reported field and try again; the previous timeline stays intact.</li>
       </ol>
     )

@@ -14,7 +14,7 @@ import {
   generateVoiceover, cancelVoiceoverGeneration, downloadGeneratedVoiceover, removeGeneratedVoiceover,
   isVoiceoverCurrent, seekTo
 } from '../../media/session';
-import PIPER_VOICES from '../../../model-voices.json';
+import { PIPER_VOICES, bundledVoice, DEFAULT_VOICE_B } from '../../core/audio/voices';
 
 /* ------------------------------ Lyrics ------------------------------ */
 
@@ -72,8 +72,8 @@ export function LyricsPanel() {
   const voiceoverMeta = store.project.voiceover;
   const hasAudioTrack = Boolean(store.project.audio);
   const hasSpeakerB = useMemo(() => lines.some((l) => l.speaker === 'B'), [lines]);
-  const selectedVoiceId = voiceChoice ?? PIPER_VOICES.find((v) => v.id === voicePrefs?.voiceId)?.id ?? voiceoverMeta?.voiceId ?? PIPER_VOICES[0]?.id ?? 'en_US-lessac-medium';
-  const selectedVoiceIdB = voiceChoiceB ?? PIPER_VOICES.find((v) => v.id === voicePrefs?.voiceIdB)?.id ?? voiceoverMeta?.voiceIdB ?? PIPER_VOICES[2]?.id ?? 'en_US-ryan-medium';
+  const selectedVoiceId = bundledVoice(voiceChoice ?? voicePrefs?.voiceId ?? voiceoverMeta?.voiceId);
+  const selectedVoiceIdB = bundledVoice(voiceChoiceB ?? voicePrefs?.voiceIdB ?? voiceoverMeta?.voiceIdB, DEFAULT_VOICE_B);
   const effectiveVoiceMode: VoiceoverMode =
     voiceModeChoice ?? voiceoverMeta?.mode ?? (hasAudioTrack ? 'timed' : 'sequential');
   const transcriptionBusy = isGenerationBusy(transcription.state);
@@ -102,6 +102,25 @@ export function LyricsPanel() {
     }
     return found;
   }, [lines, bodyTimeUs]);
+
+  function applyDraft(narrate: boolean) {
+    if (isSpec) {
+      if (!importVideoSpecText(draft, 'Import video spec', narrate)) return;
+      setVoiceChoice(null);
+      setVoiceChoiceB(null);
+      setPauseMs(null);
+    } else if (composeMode === 'script') {
+      if (!store.setScenesFromScript(draft, { mode: splitMode, wordsPerMinute: scriptWpm, pauseMs })) {
+        store.notify({ kind: 'warning', title: 'No readable scenes found', detail: 'Add some script text and try again.' });
+        return;
+      }
+      if (narrate) void generateVoiceover(selectedVoiceId, { mode: 'sequential', pauseMs, voiceIdB: selectedVoiceIdB });
+    } else {
+      store.setLyricsFromText(draft, 'user');
+    }
+    setDraft('');
+    setPasteOpen(false);
+  }
 
   return (
     <>
@@ -199,24 +218,17 @@ export function LyricsPanel() {
           <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
             <button
               className="btn btn-sm btn-primary"
-              onClick={() => {
-                if (isSpec) {
-                  if (!importVideoSpecText(draft)) return;
-                  setVoiceChoice(null);
-                  setVoiceChoiceB(null);
-                  setPauseMs(null);
-                } else if (composeMode === 'script') {
-                  store.setScenesFromScript(draft, { mode: splitMode, wordsPerMinute: scriptWpm, pauseMs });
-                } else {
-                  store.setLyricsFromText(draft, 'user');
-                }
-                setDraft('');
-                setPasteOpen(false);
-              }}
+              onClick={() => applyDraft(false)}
               disabled={draft.trim().length === 0}
             >
               {isSpec ? 'Apply video spec' : composeMode === 'script' ? 'Build scenes' : 'Use these lyrics'}
             </button>
+            {isSpec || composeMode === 'script' ? (
+              <button className="btn btn-sm btn-ghost" onClick={() => applyDraft(true)}
+                disabled={!draft.trim() || voiceoverBusy || transcriptionBusy}>
+                {isSpec ? 'Apply & narrate' : 'Build & narrate'}
+              </button>
+            ) : null}
             <span className="ed-hint">
               {isSpec ? 'Video spec detected. Replaces current scenes; undo with Ctrl/⌘ + Z. Narration is spoken, not displayed.' : composeMode === 'script'
                 ? 'Ready to preview, sync local TTS, or export MP4.'
@@ -288,7 +300,7 @@ export function LyricsPanel() {
       <div className="ed-panel-section ed-generation-section">
         <span className="ed-panel-label">Local TTS voiceover &amp; sync</span>
         <p className="ed-hint">
-          Piper voices run locally in your browser. In <strong>Auto-time scenes</strong> mode, each scene’s exact duration is set from its synthesized audio.
+          Piper voices run locally in your browser. The creator lists <a href="https://brycebeattie.com/files/tts/" target="_blank" rel="noreferrer">Norman and LJSpeech as public-domain models</a>. In <strong>Auto-time scenes</strong> mode, each scene’s exact duration is set from its synthesized audio.
         </p>
         <label className="ed-field">
           <span className="ed-hint">{hasSpeakerB ? 'Voice A (default / Speaker A)' : 'Voice'}</span>

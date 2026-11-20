@@ -8,7 +8,8 @@ test('paste a chat spec, preview it, undo, reopen and recover from a bad paste',
   const count = page.getByRole('complementary', { name: 'Inspector' }).getByText('13 scenes', { exact: true });
   const draft = page.locator('#lyric-paste');
   await button('Script to video').click();
-  const escaped = JSON.stringify(example, null, 2).replace(/[\[\]_]/g, '\\$&');
+  const legacy = { ...example, voice: { ...example.voice, voiceId: 'en_US-ryan-medium' } };
+  const escaped = JSON.stringify(legacy, null, 2).replace(/[\[\]_]/g, '\\$&');
   await draft.fill('```json\n' + escaped + '\n```');
   await button('Apply video spec').click();
   await expect(count).toBeVisible();
@@ -22,7 +23,7 @@ test('paste a chat spec, preview it, undo, reopen and recover from a bad paste',
     return light;
   })).toBeGreaterThan(500);
   await expect(page.getByRole('textbox', { name: 'Project title' })).toHaveValue(example.title);
-  await expect(page.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(example.voice.voiceId);
+  await expect(page.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(legacy.voice.voiceId);
   await button('Undo').click();
   await expect(page.getByRole('complementary', { name: 'Inspector' }).getByText('0 scenes', { exact: true })).toBeVisible();
   await button('Redo').click();
@@ -35,7 +36,7 @@ test('paste a chat spec, preview it, undo, reopen and recover from a bad paste',
   if (!await draft.isVisible()) await button('Paste script / lyrics').click();
   const broken = '{"kind":"vidlyrics.spec","scenes":[';
   await draft.fill(broken);
-  await button('Apply video spec').click();
+  await button('Apply & narrate').click();
   await expect(page.getByText('Invalid video spec', { exact: true })).toBeVisible();
   await expect(draft).toHaveValue(broken);
   await expect(count).toBeVisible();

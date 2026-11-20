@@ -1,5 +1,6 @@
 import type { AssetRecord, Line, Project, VoiceoverMeta, VoiceoverMode } from '../core/types';
 import { usFromMs, usFromSeconds } from '../core/time';
+import { bundledVoice, DEFAULT_VOICE_B } from '../core/audio/voices';
 import { decodeWav } from '../core/audio/wav';
 import { mixVoiceover, renderStandaloneVoiceover, voiceoverSourceSignature } from '../core/audio/voiceover';
 import { whisperSegmentsToCues, untimedTranscriptCue } from '../core/lyrics/transcript';
@@ -1481,7 +1482,7 @@ export function exportVideoSpecFile(): void {
   });
 }
 
-export function importVideoSpecText(text: string, label = 'Import video spec'): boolean {
+export function importVideoSpecText(text: string, label = 'Import video spec', narrate = false): boolean {
   const store = useEditor.getState();
   const parsed = parseVideoSpecJson(text);
   if (!parsed.ok || !parsed.spec) {
@@ -1494,7 +1495,16 @@ export function importVideoSpecText(text: string, label = 'Import video spec'): 
     return false;
   }
   engine?.pause();
-  store.applyVideoSpec(parsed.spec, { label, resetPlayhead: true });
+  const spec = parsed.spec;
+  // Resolve the combined action from this draft, never the displaced project's voice hint.
+  const voice = {
+    ...spec.voice,
+    voiceId: bundledVoice(spec.voice?.voiceId),
+    voiceIdB: spec.scenes.some(scene => scene.speaker === 'B')
+      ? bundledVoice(spec.voice?.voiceIdB, DEFAULT_VOICE_B) : spec.voice?.voiceIdB,
+    pauseMs: spec.voice?.pauseMs ?? 300
+  };
+  store.applyVideoSpec(narrate ? { ...spec, voice } : spec, { label, resetPlayhead: true });
   seekTo(useEditor.getState().playheadUs);
   void hydrateImagesFromStorage();
   store.notify({
@@ -1503,6 +1513,7 @@ export function importVideoSpecText(text: string, label = 'Import video spec'): 
     detail: `${parsed.spec.scenes.length} scene${parsed.spec.scenes.length === 1 ? '' : 's'} compiled to the timeline.`
   });
   void persist();
+  if (narrate) void generateVoiceover(voice.voiceId, { mode: 'sequential', pauseMs: voice.pauseMs, voiceIdB: voice.voiceIdB });
   return true;
 }
 
