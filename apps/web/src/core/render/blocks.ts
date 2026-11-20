@@ -2,7 +2,6 @@ import type { BackgroundSpec, Microseconds, SceneLayout, SceneTransition } from 
 import type { CompositionBox, Scene, SceneLine } from './scene';
 import { layoutWords, rowOriginX, type Measurer } from './layout';
 import { clamp01, easeOutBack, easeOutCubic, easeOutExpo, spring } from './easing';
-import { highlightTokens } from '../lyrics/segment';
 
 /**
  * Pure computation and Canvas2D rasterisation for programmatic scene layouts:
@@ -62,6 +61,7 @@ export interface BlockFrame {
   translateY: number;
   scale: number;
   clipWipe: number;
+  fitScale: number;
   accentColor: string;
   textColor: string;
   dimColor: string;
@@ -203,7 +203,7 @@ export function interpolateStatValue(raw: string, progress: number): string {
   if (t >= 0.999) return trimmed;
 
   const match = /^([^0-9+-]*)([+-]?)(\d[\d,]*)(?:\.(\d+))?(.*)$/.exec(trimmed);
-  if (!match) return trimmed;
+  if (!match || /\d/.test(match[5] ?? '')) return trimmed; // e.g. Romans 8:1 is a reference, not a metric.
 
   const prefix = match[1] ?? '';
   const sign = match[2] ?? '';
@@ -227,7 +227,7 @@ export function interpolateStatValue(raw: string, progress: number): string {
   return `${prefix}${renderedSign}${formattedInt}${renderedDec}${suffix}`;
 }
 
-function wrapTextRows(
+export function wrapTextRows(
   text: string,
   measure: BlockMeasureFn,
   options: {
@@ -244,13 +244,15 @@ function wrapTextRows(
 ): { rows: TextRowSpec[]; heightPx: number } {
   const clean = text.trim();
   if (!clean) return { rows: [], heightPx: 0 };
-  const tokens = highlightTokens(clean).map((token, index) => ({ text: token.text, index }));
+  // Static display text wraps at whitespace; don't split references, contractions
+  // or hyphenated words just because speech timing would tokenize punctuation.
+  const tokens = (clean.match(/\S+|\s+/gu) ?? []).map((text, index) => ({ text, index }));
   if (tokens.length === 0) return { rows: [], heightPx: 0 };
   const measurer = measure(options.fontSizePx, options.weight, options.letterSpacingPx ?? 0);
   const layout = layoutWords(tokens, measurer, {
     fontSizePx: options.fontSizePx,
     lineHeightPx: options.lineHeightPx,
-    maxWidthPx: Math.max(40, options.maxWidthPx),
+    maxWidthPx: Math.max(1, options.maxWidthPx),
     letterSpacingPx: options.letterSpacingPx ?? 0,
     uppercase: options.uppercase ?? false
   });
@@ -333,6 +335,7 @@ export function buildBlockFrame(
     translateY: envelope.translateY,
     scale: envelope.scale,
     clipWipe: envelope.clipWipe,
+    fitScale: 1,
     accentColor,
     textColor,
     dimColor,
@@ -353,6 +356,13 @@ export function buildBlockFrame(
   const kickerText = spec.kicker?.trim().toUpperCase() ?? '';
   const subtextRaw = (spec.subtext ?? line.translation ?? '').trim();
   const kickerSize = Math.max(12, Math.round(minDim * 0.024));
+
+  // Keep every row of a dense scene. Fit the completed, unanimated layout
+  // rather than dropping list entries or resizing as they are revealed.
+  const groupTopFor = (height: number) => {
+    base.fitScale = Math.min(1, box.contentHeight / Math.max(1, height));
+    return box.contentTop + Math.max(0, (box.contentHeight - height) / 2);
+  };
 
   /* ---------------------------- TITLE ---------------------------- */
   if (layout === 'title') {
@@ -389,7 +399,7 @@ export function buildBlockFrame(
     const ruleHeight = Math.max(3, Math.round(minDim * 0.0045));
     const ruleBlock = gap * 0.9 + ruleHeight + (subMeasure.rows.length > 0 ? gap * 0.9 : 0);
     const totalH = kickerBlock + headMeasure.heightPx + ruleBlock + subMeasure.heightPx;
-    let cursorY = box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2);
+    let cursorY = groupTopFor(totalH);
 
     if (kickerText) {
       base.kicker = {
@@ -472,7 +482,7 @@ export function buildBlockFrame(
     const kickerBlock = kickerText ? kickerSize + gap : 0;
     const totalH =
       kickerBlock + statSize * 1.05 + gap + headMeasure.heightPx + (subMeasure.rows.length > 0 ? gap * 0.7 + subMeasure.heightPx : 0);
-    let cursorY = box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2);
+    let cursorY = groupTopFor(totalH);
 
     if (kickerText) {
       base.kicker = {
@@ -557,8 +567,12 @@ export function buildBlockFrame(
     const kickerBlock = kickerText ? kickerSize + Math.round(kickerSize * 0.65) : 0;
     const itemsTotalH =
       measuredItems.reduce((sum, m) => sum + m.heightPx, 0) + Math.max(0, count - 1) * itemGap;
-    const totalH = kickerBlock + headMeasure.heightPx + sectionGap + itemsTotalH;
-    let cursorY = box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2);
+    const footer = wrapTextRows(subtextRaw, measure, {
+      fontSizePx: kickerSize, weight: 400, lineHeightPx: kickerSize * 1.3,
+      maxWidthPx: innerWidth, leftPx: innerLeft, topPx: 0, align: 'left'
+    });
+    const totalH = kickerBlock + headMeasure.heightPx + sectionGap + itemsTotalH + (footer.rows.length ? itemGap + footer.heightPx : 0);
+    let cursorY = groupTopFor(totalH);
 
     if (kickerText) {
       base.kicker = {
@@ -597,6 +611,9 @@ export function buildBlockFrame(
       };
     });
 
+    if (footer.rows.length) {
+      base.subtext = { fontSizePx: kickerSize, opacity: 1, rows: footer.rows.map(r => ({ ...r, baselineY: r.baselineY + cursorY })) };
+    }
     base.bullets = { items: bulletFrames, fontSizePx: itemSize };
     return base;
   }
@@ -638,7 +655,12 @@ export function buildBlockFrame(
 
     const gap = Math.round(quoteSize * 0.5);
     const totalH = headMeasure.heightPx + (subMeasure.rows.length > 0 ? gap + subMeasure.heightPx : 0);
-    const topY = box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2);
+    const kickerHeight = kickerText ? kickerSize + gap : 0;
+    const groupTop = groupTopFor(totalH + kickerHeight);
+    const topY = groupTop + kickerHeight;
+    if (kickerText) {
+      base.kicker = { text: kickerText, x: textLeft, baselineY: groupTop + kickerSize * 0.85, fontSizePx: kickerSize, opacity: 1 };
+    }
 
     base.headline = {
       fontSizePx: quoteSize,
@@ -669,8 +691,7 @@ export function buildBlockFrame(
 
   /* ----------------------------- CODE ---------------------------- */
   if (layout === 'code') {
-    const rawLines = spec.items && spec.items.length > 0 ? spec.items : line.text.split('\n');
-    const codeLines = rawLines.slice(0, 14);
+    const codeLines = spec.items && spec.items.length > 0 ? spec.items : line.text.split('\n');
     const longestChars = Math.max(16, ...codeLines.map((c) => c.length));
 
     const cardWidth = Math.round(Math.min(box.contentWidth * 0.95, scene.width * 0.82));
@@ -722,7 +743,7 @@ export function buildBlockFrame(
       (headMeasure.rows.length > 0 ? headMeasure.heightPx + gap : 0) +
       cardHeight +
       (subMeasure.rows.length > 0 ? gap * 0.8 + subMeasure.heightPx : 0);
-    let cursorY = Math.round(box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2));
+    let cursorY = Math.round(groupTopFor(totalH));
 
     if (headMeasure.rows.length > 0) {
       base.headline = {
@@ -779,8 +800,7 @@ export function buildBlockFrame(
   }
 
   /* ---------------------------- CHART ---------------------------- */
-  const rawBars = spec.chart && spec.chart.length > 0 ? spec.chart : [{ label: 'Progress', value: 100 }];
-  const bars = rawBars.slice(0, 8);
+  const bars = spec.chart && spec.chart.length > 0 ? spec.chart : [{ label: 'Progress', value: 100 }];
   const maxVal = Math.max(1e-6, ...bars.map((b) => Math.max(0, b.value)));
 
   const chartWidth = Math.round(Math.min(box.contentWidth * 0.92, scene.width * 0.78));
@@ -821,7 +841,7 @@ export function buildBlockFrame(
   const barsTotalH = bars.length * rowStride;
   const totalH =
     kickerBlock + headMeasure.heightPx + gap + barsTotalH + (subMeasure.rows.length > 0 ? gap * 0.6 + subMeasure.heightPx : 0);
-  let cursorY = Math.round(box.contentTop + Math.max(0, (box.contentHeight - totalH) / 2));
+  let cursorY = Math.round(groupTopFor(totalH));
 
   if (kickerText) {
     base.kicker = {
@@ -980,6 +1000,13 @@ export function paintBlock(
     ctx.rect(0, 0, scene.width * clamp01(block.clipWipe), scene.height);
     ctx.clip();
   }
+  if (block.fitScale < 1) {
+    const x = scene.box.contentLeft + scene.box.contentWidth / 2;
+    const y = scene.box.contentTop;
+    ctx.translate(x, y);
+    ctx.scale(block.fitScale, block.fitScale);
+    ctx.translate(-x, -y);
+  }
   ctx.textBaseline = 'alphabetic';
 
   // Kicker label
@@ -992,7 +1019,7 @@ export function paintBlock(
     }
     ctx.fillStyle = block.accentColor;
     ctx.textAlign = block.align;
-    ctx.fillText(block.kicker.text, block.kicker.x, block.kicker.baselineY);
+    ctx.fillText(block.kicker.text, block.kicker.x, block.kicker.baselineY, scene.box.contentWidth * 0.85);
     ctx.restore();
   }
 
@@ -1168,7 +1195,7 @@ export function paintBlock(
       ctx.font = `600 ${ch.fontSizePx}px ${fontStack}`;
       ctx.textAlign = 'left';
       ctx.fillStyle = block.textColor;
-      ctx.fillText(bar.label, ch.labelX, labelBaseline);
+      ctx.fillText(bar.label, ch.labelX, labelBaseline, Math.max(1, ch.trackWidth - ch.fontSizePx * (bar.valueText.length + 1)));
 
       ctx.font = `700 ${ch.fontSizePx}px ${MONO_STACK}`;
       ctx.textAlign = 'right';

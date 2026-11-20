@@ -1,5 +1,5 @@
 import type { AssetRecord, Project } from '../core/types';
-import { idbDelete, idbGet, idbGetAll, idbGetByIndex, idbPut, STORE_ASSETS, STORE_PROJECTS, StorageQuotaError } from './idb';
+import { idbDelete, idbGet, idbGetAll, idbPut, STORE_ASSETS, STORE_PROJECTS, StorageQuotaError } from './idb';
 
 /**
  * Project repository.
@@ -73,10 +73,10 @@ export async function deleteProject(id: string): Promise<void> {
 }
 
 export async function saveAsset(record: AssetRecord, payload: Blob | ArrayBuffer): Promise<AssetRecord> {
-  // Content-hash dedupe: the same song imported twice is stored once.
-  const existing = await idbGetByIndex<{ record: AssetRecord }>(STORE_ASSETS, 'contentHash', record.contentHash);
-  if (existing?.record) return existing.record;
-  await idbPut(STORE_ASSETS, { record, payload });
+  // IDs already include the asset role and a digest. Upsert by the
+  // referenced ID: equal bytes under a different role must remain addressable.
+  // The v1 store and its deduplication index use top-level key paths.
+  await idbPut(STORE_ASSETS, { id: record.id, contentHash: record.contentHash, record, payload });
   return record;
 }
 

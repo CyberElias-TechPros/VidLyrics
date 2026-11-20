@@ -81,8 +81,11 @@ async function loadManifest(): Promise<BundledModelManifest> {
       if (!response.ok) {
         throw new Error('This app release does not include the bundled speech models. Run the full model-pack build before deploying.');
       }
+      if (!response.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('This app release is missing its speech model manifest. Install the full model-pack build to generate speech or subtitles.');
+      }
       const value = await response.json() as Partial<BundledModelManifest>;
-      if (value.schemaVersion !== 1 || !value.bundleId || !value.whisper?.tiny || !value.whisper?.base || !value.piper || !value.licenses?.whisper) {
+      if (value.schemaVersion !== 1 || !value.bundleId || !value.whisper || !value.piper || !value.licenses?.whisper) {
         throw new Error('The bundled model manifest is invalid. Rebuild the app model pack.');
       }
       return value as BundledModelManifest;
@@ -221,6 +224,7 @@ async function hasStoredPiperModel(voiceId: string): Promise<boolean> {
 export async function selectBundledWhisperModel(id: 'tiny' | 'base'): Promise<SelectedWhisperModel> {
   const manifest = await loadManifest();
   const model = manifest.whisper[id];
+  if (!model) throw new Error(`The bundled release does not contain the “${id}” Whisper model.`);
   const installed = await readInstalled('whisper', id) ?? await findLegacyWhisperModel(id);
   const needsUpdate = !!installed && installed.version !== model.version;
   const previousAvailable = installed ? await hasWhisperModel(installed.url) : false;

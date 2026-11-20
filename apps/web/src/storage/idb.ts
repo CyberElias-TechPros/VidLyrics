@@ -72,7 +72,8 @@ async function run<T>(
   return new Promise<T>((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
     const request = handler(transaction.objectStore(storeName));
-    request.onsuccess = () => resolve(request.result);
+    // A successful put can still be rolled back (for example on quota exhaustion).
+    transaction.oncomplete = () => resolve(request.result);
     request.onerror = () => {
       if (isQuotaError(request.error)) reject(new StorageQuotaError('Browser storage is full.'));
       else reject(request.error ?? new Error('IndexedDB request failed.'));

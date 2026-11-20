@@ -1,18 +1,20 @@
 import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../state/store';
 import type { Line, SceneLayout, SceneTransition, VoiceoverMode } from '../../core/types';
+import { isVideoSpecJson } from '../../core/spec/schema';
+import { readProjectVoicePrefs } from '../../core/spec/compiler';
 import type { ScriptSplitMode } from '../../core/lyrics/script';
 import { THEMES, ASPECTS, EXPORT_PRESETS, getExportPreset, exportSettingsFromPreset, validateExportSettings, estimateOutputBytes, estimateRender, formatBytes, getTheme } from '../../core/design/tokens';
 import { SUBTITLE_FORMATS } from '../../core/export/subtitles';
 import { formatClock, formatTimecode, usToSeconds } from '../../core/time';
 import { detectInstrumentalRegions } from '../../core/timing/postprocess';
 import {
-  timelineDurationUs, exportSubtitle, exportProjectFile, exportVideoSpecFile, importImageAsset,
+  importVideoSpecText, timelineDurationUs, exportSubtitle, exportProjectFile, exportVideoSpecFile, importImageAsset,
   transcribeAudio, cancelTranscription, applyGeneratedTranscript, dismissGeneratedTranscript,
   generateVoiceover, cancelVoiceoverGeneration, downloadGeneratedVoiceover, removeGeneratedVoiceover,
   isVoiceoverCurrent, seekTo
 } from '../../media/session';
-import PIPER_VOICES from '../../../model-voices.json';
+import { PIPER_VOICES, bundledVoice, DEFAULT_VOICE_B } from '../../core/audio/voices';
 
 /* ------------------------------ Lyrics ------------------------------ */
 
@@ -53,12 +55,15 @@ export function LyricsPanel() {
   const [splitMode, setSplitMode] = useState<ScriptSplitMode>('sentences');
   const [scriptWpm, setScriptWpm] = useState(155);
   const [draft, setDraft] = useState('');
+  const isSpec = useMemo(() => isVideoSpecJson(draft), [draft]);
   const [whisperModel, setWhisperModel] = useState<'tiny' | 'base'>('tiny');
   const [transcriptionLanguage, setTranscriptionLanguage] = useState('auto');
   const [voiceChoice, setVoiceChoice] = useState<string | null>(null);
   const [voiceChoiceB, setVoiceChoiceB] = useState<string | null>(null);
   const [voiceModeChoice, setVoiceModeChoice] = useState<VoiceoverMode | null>(null);
-  const [pauseMs, setPauseMs] = useState<number>(() => store.project.voiceover?.pauseMs ?? 300);
+  const [pauseChoice, setPauseMs] = useState<number | null>(null);
+  const voicePrefs = useMemo(() => readProjectVoicePrefs(store.project), [store.project]);
+  const pauseMs = pauseChoice ?? voicePrefs?.pauseMs ?? 300;
   const [sceneEditorOpen, setSceneEditorOpen] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const sceneImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -67,8 +72,8 @@ export function LyricsPanel() {
   const voiceoverMeta = store.project.voiceover;
   const hasAudioTrack = Boolean(store.project.audio);
   const hasSpeakerB = useMemo(() => lines.some((l) => l.speaker === 'B'), [lines]);
-  const selectedVoiceId = voiceChoice ?? voiceoverMeta?.voiceId ?? PIPER_VOICES[0]?.id ?? 'en_US-lessac-medium';
-  const selectedVoiceIdB = voiceChoiceB ?? voiceoverMeta?.voiceIdB ?? PIPER_VOICES[2]?.id ?? 'en_US-ryan-medium';
+  const selectedVoiceId = bundledVoice(voiceChoice ?? voicePrefs?.voiceId ?? voiceoverMeta?.voiceId);
+  const selectedVoiceIdB = bundledVoice(voiceChoiceB ?? voicePrefs?.voiceIdB ?? voiceoverMeta?.voiceIdB, DEFAULT_VOICE_B);
   const effectiveVoiceMode: VoiceoverMode =
     voiceModeChoice ?? voiceoverMeta?.mode ?? (hasAudioTrack ? 'timed' : 'sequential');
   const transcriptionBusy = isGenerationBusy(transcription.state);
@@ -83,17 +88,39 @@ export function LyricsPanel() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return lines;
-    return lines.filter((l) => l.text.toLowerCase().includes(q));
+    return lines.filter(({ text, scene }) => [text, scene?.kicker, scene?.subtext, scene?.narration, scene?.value,
+      ...(scene?.items ?? []), ...(scene?.chart ?? []).map(bar => bar.label)
+    ].some(field => field?.toLowerCase().includes(q)));
   }, [lines, query]);
 
+  const bodyTimeUs = playheadUs - (store.project.design.intro.enabled ? store.project.design.intro.durationUs : 0) - store.project.export.globalOffsetUs;
   const currentIndex = useMemo(() => {
     let found = -1;
     for (let i = 0; i < lines.length; i += 1) {
       const l = lines[i];
-      if (l && playheadUs >= l.start && playheadUs <= l.end) found = i;
+      if (l && bodyTimeUs >= l.start && bodyTimeUs <= l.end) found = i;
     }
     return found;
-  }, [lines, playheadUs]);
+  }, [lines, bodyTimeUs]);
+
+  function applyDraft(narrate: boolean) {
+    if (isSpec) {
+      if (!importVideoSpecText(draft, 'Import video spec', narrate)) return;
+      setVoiceChoice(null);
+      setVoiceChoiceB(null);
+      setPauseMs(null);
+    } else if (composeMode === 'script') {
+      if (!store.setScenesFromScript(draft, { mode: splitMode, wordsPerMinute: scriptWpm, pauseMs })) {
+        store.notify({ kind: 'warning', title: 'No readable scenes found', detail: 'Add some script text and try again.' });
+        return;
+      }
+      if (narrate) void generateVoiceover(selectedVoiceId, { mode: 'sequential', pauseMs, voiceIdB: selectedVoiceIdB });
+    } else {
+      store.setLyricsFromText(draft, 'user');
+    }
+    setDraft('');
+    setPasteOpen(false);
+  }
 
   return (
     <>
@@ -160,7 +187,7 @@ export function LyricsPanel() {
                 : 'One line per lyric.\nStructural tags like [Chorus] are read as sections.'
             }
           />
-          {composeMode === 'script' ? (
+          {!isSpec && composeMode === 'script' ? (
             <div className="ed-generation-controls">
               <label className="ed-field">
                 <span className="ed-hint">Split by</span>
@@ -191,21 +218,19 @@ export function LyricsPanel() {
           <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
             <button
               className="btn btn-sm btn-primary"
-              onClick={() => {
-                if (composeMode === 'script') {
-                  store.setScenesFromScript(draft, { mode: splitMode, wordsPerMinute: scriptWpm, pauseMs });
-                } else {
-                  store.setLyricsFromText(draft, 'user');
-                }
-                setDraft('');
-                setPasteOpen(false);
-              }}
+              onClick={() => applyDraft(false)}
               disabled={draft.trim().length === 0}
             >
-              {composeMode === 'script' ? 'Build scenes' : 'Use these lyrics'}
+              {isSpec ? 'Apply video spec' : composeMode === 'script' ? 'Build scenes' : 'Use these lyrics'}
             </button>
+            {isSpec || composeMode === 'script' ? (
+              <button className="btn btn-sm btn-ghost" onClick={() => applyDraft(true)}
+                disabled={!draft.trim() || voiceoverBusy || transcriptionBusy}>
+                {isSpec ? 'Apply & narrate' : 'Build & narrate'}
+              </button>
+            ) : null}
             <span className="ed-hint">
-              {composeMode === 'script'
+              {isSpec ? 'Video spec detected. Replaces current scenes; undo with Ctrl/⌘ + Z. Narration is spoken, not displayed.' : composeMode === 'script'
                 ? 'Ready to preview, sync local TTS, or export MP4.'
                 : 'Undoable with Ctrl/⌘ + Z.'}
             </span>
@@ -275,7 +300,7 @@ export function LyricsPanel() {
       <div className="ed-panel-section ed-generation-section">
         <span className="ed-panel-label">Local TTS voiceover &amp; sync</span>
         <p className="ed-hint">
-          Piper voices run locally in your browser. In <strong>Auto-time scenes</strong> mode, each scene’s exact duration is set from its synthesized audio.
+          Piper voices run locally in your browser. The creator lists <a href="https://brycebeattie.com/files/tts/" target="_blank" rel="noreferrer">Norman and LJSpeech as public-domain models</a>. In <strong>Auto-time scenes</strong> mode, each scene’s exact duration is set from its synthesized audio.
         </p>
         <label className="ed-field">
           <span className="ed-hint">{hasSpeakerB ? 'Voice A (default / Speaker A)' : 'Voice'}</span>
@@ -310,10 +335,10 @@ export function LyricsPanel() {
                 className="ed-input"
                 type="number"
                 min={0}
-                max={3000}
+                max={5000}
                 step={50}
                 value={pauseMs}
-                onChange={(e) => setPauseMs(Math.max(0, Math.min(3000, Number(e.target.value) || 0)))}
+                onChange={(e) => setPauseMs(Math.max(0, Math.min(5000, Number(e.target.value) || 0)))}
               />
             </label>
           ) : null}
@@ -508,6 +533,14 @@ export function LyricsPanel() {
                   onChange={(e) => store.setLineScene(selectedLine.id, { subtext: e.target.value })}
                 />
               </label>
+              <label className="ed-field">
+                <span className="ed-hint">Narration (spoken, not shown)</span>
+                <textarea className="ed-textarea" maxLength={4000}
+                  value={selectedLine.scene?.narration ?? ''}
+                  placeholder="Optional voiceover script. Leave blank to speak the scene copy."
+                  onChange={e => store.setLineScene(selectedLine.id, { narration: e.target.value || undefined })}
+                />
+              </label>
               <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={() => sceneImageInputRef.current?.click()}>
                   {selectedLine.scene?.background?.kind === 'image' ? 'Replace scene image' : 'Set scene image'}
@@ -566,7 +599,7 @@ export function LyricsPanel() {
                 onClick={() => {
                   store.setSelection([line.id]);
                   const introUs = store.project.design.intro.enabled ? store.project.design.intro.durationUs : 0;
-                  seekTo(introUs + line.start + Math.min(350_000, Math.round((line.end - line.start) * 0.25)));
+                  seekTo(introUs + store.project.export.globalOffsetUs + line.start + Math.min(350_000, Math.round((line.end - line.start) * 0.25)));
                 }}
               >
                 {showHeat ? <i className="ed-conf-dot" data-conf={conf} style={{ display: 'inline-block', marginRight: 4 }} /> : null}

@@ -395,3 +395,89 @@ describe('multi-scene deterministic renderer & v3 migration', () => {
     expect(frame.blocks).toHaveLength(0);
   });
 });
+
+describe('chat-generated portrait project', () => {
+  it('recovers Markdown escapes without changing legitimate JSON escapes', () => {
+    const source = String.raw`{"voice":{"voiceId":"en\_US-ryan-medium"},"scenes":\[{"text":"a\\_b\n\"hello\""}\]}`;
+    const parsed = parseVideoSpecJson('```json\r\n' + source + '\r\n```');
+    expect(parsed.spec?.voice?.voiceId).toBe('en_US-ryan-medium');
+    expect(parsed.spec?.scenes[0]?.text).toBe('a\\_b\n"hello"');
+    expect(isVideoSpecJson(source)).toBe(true);
+    expect(parseVideoSpecJson(source.replace('hello', '\\q')).ok).toBe(false);
+    expect(isVideoSpecJson('```js\nconsole.log("hello")\n```')).toBe(false);
+    expect(parseVideoSpecJson('{"scenes":[{"text":"  "}]}').ok).toBe(false);
+  });
+
+  it('renders the supplied script scene by scene, without promoting narration to display text', async () => {
+    const { default: example } = await import('../../../examples/the-sin-cycle.spec.json');
+    const spec = parseVideoSpecJson(JSON.stringify(example)).spec!;
+    const project = compileVideoSpec(spec);
+    const scene = buildScene(project);
+    expect(scene.lines).toHaveLength(13);
+    expect(project.export.rangeEndUs).toBe(totalDuration(scene));
+    const copy = (rows?: { text: string }[]) => rows?.map(row => row.text).join(' ').replace(/\s+/g, ' ').trim();
+    for (const [index, input] of spec.scenes.entries()) {
+      const line = scene.lines[index]!;
+      expect(line.scene?.narration).toBe(input.narration);
+      const spokenWords = input.narration!.split(/\s+/).length;
+      expect(line.end - line.start).toBeGreaterThanOrEqual(spokenWords / 155 * 60_000_000);
+      const frame = computeFrameState(scene, Math.round((line.start + line.end) / 2), monoMeasure);
+      const block = frame.blocks[0];
+      const caption = frame.lines[0];
+      expect((block ?? caption)?.kicker?.text).toBe(input.kicker);
+      if (input.layout === 'caption') {
+        expect(copy(caption?.rows.map(row => ({ text: row.tokens.map(t => t.text).join('') })))).toBe(input.text);
+        for (const row of caption!.rows) {
+          expect(row.baselineY).toBeGreaterThan(scene.box.contentTop);
+          expect(row.baselineY).toBeLessThan(scene.box.contentTop + scene.box.contentHeight);
+        }
+      } else {
+        expect(copy(block?.headline?.rows)).toBe(input.text);
+        if (input.subtext) expect(copy(block?.subtext?.rows)?.replace(/^— /, '')).toBe(input.subtext);
+        if (input.items) expect(block?.bullets?.items.map(b => copy(b.rows))).toEqual(input.items);
+        if (input.chart) expect(block?.chart?.bars.map(b => b.label)).toEqual(input.chart.map(b => b.label));
+        if (input.value) {
+          const early = computeFrameState(scene, line.start + 120_000, monoMeasure);
+          expect(early.blocks.find(b => b.id === line.id)?.stat?.text).toBe(input.value);
+        }
+      }
+    }
+    const { ctx } = createMockContext();
+    const outro = renderFrame(ctx, scene, totalDuration(scene) - usFromSeconds(1), { measure: monoMeasure });
+    expect(outro.card?.title).toBe(example.outro.title);
+    const painted = vi.mocked(ctx.fillText).mock.calls.map(([text]) => text).join(' ');
+    expect(painted).toBe(`${example.outro.title} ${example.outro.subtitle}`);
+    expect(vi.mocked(ctx.fillText).mock.calls.length).toBeGreaterThan(2); // subtitle wraps in portrait
+  });
+
+  it('applies the intro once, keeps word timings in sync and leaves the outro clear', () => {
+    const scene = buildScene(compileVideoSpec({
+      intro: { title: 'Intro', duration: 3 }, outro: { title: 'Outro', duration: 2 },
+      scenes: [{ text: 'Sing, then rest.', duration: 1 }]
+    }), { offsetUs: 500_000 });
+    const before = computeFrameState(scene, 2_000_000, monoMeasure);
+    expect(before.lines).toHaveLength(0);
+    expect(before.card?.kind).toBe('intro');
+    const during = computeFrameState(scene, 3_600_000, monoMeasure);
+    expect(during.lines[0]?.isCurrent).toBe(true);
+    expect(scene.lines[0]?.words[0]?.start).toBe(500_000);
+    expect(scene.lines[0]?.words.map(w => w.text).join('')).toBe('Sing, then rest.');
+    expect(computeFrameState(scene, 4_700_000, monoMeasure).card?.kind).toBe('outro');
+  });
+
+  it('retains all supported chart bars and code rows', () => {
+    const chart = Array.from({ length: 12 }, (_, i) => ({ label: `Bar ${i}`, value: i }));
+    const items = Array.from({ length: 24 }, (_, i) => `line ${i}`);
+    const scene = buildScene(compileVideoSpec({ scenes: [
+      { layout: 'chart', chart, text: 'Chart', duration: 2 },
+      { layout: 'code', items, text: 'Code', duration: 2 },
+      { layout: 'bullets', items, text: 'List', subtext: 'All entries included.', duration: 2 }
+    ] }));
+    expect(computeFrameState(scene, 1e6, monoMeasure).blocks[0]?.chart?.bars.map(b => b.label)).toEqual(chart.map(b => b.label));
+    expect(computeFrameState(scene, 4e6, monoMeasure).blocks[0]?.code?.lines.map(l => l.text)).toEqual(items);
+    const list = computeFrameState(scene, 6e6, monoMeasure).blocks[0];
+    expect(list?.bullets?.items).toHaveLength(24);
+    expect(list?.subtext?.rows[0]?.text).toBe('All entries included.');
+    expect(list?.fitScale).toBeLessThan(1);
+  });
+});

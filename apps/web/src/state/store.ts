@@ -119,7 +119,7 @@ export interface EditorState {
 
   /* lyrics & programmatic scenes */
   setLyricsFromText: (text: string, source: Project['lyrics']['source'], fileName?: string | null) => void;
-  setScenesFromScript: (scriptText: string, options?: ScriptSplitOptions) => void;
+  setScenesFromScript: (scriptText: string, options?: ScriptSplitOptions) => boolean;
   applyVideoSpec: (spec: VideoSpec, options?: { label?: string; coalesceKey?: string; resetPlayhead?: boolean }) => void;
   setLyricsFromTranscript: (cues: TranscriptCue[]) => void;
   updateLineText: (lineId: string, text: string) => void;
@@ -325,7 +325,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setScenesFromScript: (scriptText, options) => {
     const { project, history } = get();
     const { lines, totalDurationUs } = splitScriptToTimedScenes(scriptText, options);
-    if (lines.length === 0) return;
+    if (lines.length === 0) return false;
     const before = project.lyrics;
     const beforeSections = project.sections;
     const beforeExport = project.export;
@@ -354,6 +354,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       playheadUs: first ? first.start + introUs : 0,
       dirty: true
     });
+    return true;
   },
 
   applyVideoSpec: (spec, options) => {

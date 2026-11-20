@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { avcCodecString, videoCodecString } from '../src/media/export/encoder';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { avcCodecString, selectMp4Audio, selectMp4Video, videoCodecString } from '../src/media/export/encoder';
 import {
   EXPORT_PRESETS,
   estimateOutputBytes,
@@ -234,5 +234,59 @@ describe('formatBytes', () => {
   it('never reports NaN or Infinity to the user', () => {
     expect(formatBytes(Number.NaN)).toBe('0 B');
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe('0 B');
+  });
+});
+
+
+describe('MP4 audio selection', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  function probe(accept: (config: AudioEncoderConfig) => boolean) {
+    vi.stubGlobal('AudioEncoder', { isConfigSupported: async (config: AudioEncoderConfig) => ({ supported: accept(config) }) });
+  }
+  it('prefers AAC at the source rate, then resampled AAC before Opus', async () => {
+    probe(() => true);
+    expect(await selectMp4Audio(22050, 1, 192000, true)).toEqual({ codec: 'aac', sampleRate: 22050 });
+    probe(c => c.sampleRate === 48000);
+    expect(await selectMp4Audio(22050, 1, 192000, true)).toEqual({ codec: 'aac', sampleRate: 48000 });
+  });
+  it('falls back to 48 kHz Opus only when PCM can match the muxed track', async () => {
+    probe(c => c.codec === 'opus');
+    expect(await selectMp4Audio(22050, 1, 192000, true)).toEqual({ codec: 'opus', sampleRate: 48000 });
+    expect(await selectMp4Audio(22050, 1, 192000)).toBeNull();
+    expect(await selectMp4Audio(48000, 6, 192000)).toBeNull();
+    expect(await selectMp4Audio(48000, 2, 192000)).toEqual({ codec: 'opus', sampleRate: 48000 });
+  });
+  it('leaves the WAV fallback available when codecs are absent or probes throw', async () => {
+    vi.stubGlobal('AudioEncoder', undefined);
+    expect(await selectMp4Audio(48000, 1, 192000)).toBeNull();
+    probe(() => { throw new Error('unavailable'); });
+    expect(await selectMp4Audio(48000, 1, 192000)).toBeNull();
+  });
+});
+
+
+describe('MP4 video negotiation', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('probes the actual output settings and prefers the requested encoder', async () => {
+    const probe = vi.fn(async (config: VideoEncoderConfig) => ({ supported: config.codec.startsWith('vp09') }));
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: probe });
+    const selected = await selectMp4Video('vp9', 1080, 1920, 30, 3_000_000);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(selected.config).toMatchObject({ width: 1080, height: 1920, framerate: 30, bitrate: 3_000_000 });
+    expect(selected.config.avc).toBeUndefined();
+  });
+  it('tries H.264 baseline before switching to a different codec', async () => {
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: async (config: VideoEncoderConfig) => (
+      { supported: config.codec.startsWith('avc1.42') || config.codec.startsWith('vp09') }
+    ) });
+    const selected = await selectMp4Video('h264', 1080, 1920, 30, 3_000_000);
+    expect(selected.codec).toBe('h264');
+    expect(selected.config.codec).toMatch(/^avc1\.42/);
+  });
+  it('uses VP9 if H.264 is missing and gives a useful error when no codec works', async () => {
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: async (config: VideoEncoderConfig) => ({ supported: config.codec.startsWith('vp09') }) });
+    expect((await selectMp4Video('h264', 320, 568, 24, 1_000_000)).codec).toBe('vp9');
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: async () => ({ supported: false }) });
+    await expect(selectMp4Video('h264', 320, 568, 24, 1_000_000)).rejects.toThrow('320×568 at 24 fps');
   });
 });

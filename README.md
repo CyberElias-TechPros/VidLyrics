@@ -1,5 +1,17 @@
 # BUILD PROMPT — Lyrics Video Studio
 
+## From a chat script to a video (web studio)
+
+1. Open **Script to video**. Paste prose and choose **Build & narrate**, or paste a complete `vidlyrics.spec` JSON object and choose **Apply & narrate**. The studio generates the voice in your browser and times each scene to its speech. No microphone or speech API key is needed.
+2. New scripts default to Norman. Set `voice.voiceId` in a spec to choose another bundled voice. Norman (`en_US-norman-medium`) and LJSpeech (`en_US-ljspeech-medium`) are [listed by their creator as public-domain models](https://brycebeattie.com/files/tts/). Other voices retain their own terms.
+3. Scrub the timeline, then **Export video**. `text` is the on-screen headline or caption; `narration` is a spoken override. Reopen saved work under **Projects**.
+
+To edit before synthesis, use **Apply video spec** or **Build scenes**, then **Auto-time scenes to speech → Generate & sync speech**. A single JSON code fence and Markdown-escaped brackets/underscores are supported. An invalid spec keeps the draft and existing timeline; applying a valid spec is undoable.
+
+An importable [13-scene portrait example](examples/the-sin-cycle.spec.json) doubles as a regression fixture. Run `npm ci && npm run verify` for type checks, unit tests and the app-only build. For the browser checks run `npx playwright install --with-deps chromium` then `npm run test:e2e`. They exercise paste, undo/redo, persistence, invalid input and an actual silent MP4 export. For the production speech check, run `npm run build` (full pack) and `npm run test:release-voice`, or run the manual **Verify production speech export** workflow. This builds a real two-scene Norman voiceover, reopens the saved project and decodes the downloaded MP4 to check for audible speech, matching track durations and a visible outro. It requires an actual model pack, not the app-only build. Test other supported browsers separately.
+
+Export probes the device for the selected video settings. If needed, the studio notifies you and uses another supported codec without changing the saved spec. For audio it prefers AAC, then Opus in MP4 for compatible 48 kHz mono/stereo tracks, then a separate WAV. Some older players require H.264/AAC.
+
 ## Current speech-model packaging (2026-10-08)
 
 The production `npm run build` creates a same-origin, versioned model pack alongside the app. It includes Whisper Tiny/Base and every Piper voice offered in the editor. The packer downloads the weights during the release build, verifies Piper files against upstream checksums, includes each voice's upstream `MODEL_CARD` plus the Whisper MIT notice, and splits files into 20 MiB chunks for static hosting. Large model binaries are generated under `apps/web/public/models/` and are intentionally ignored by Git.
@@ -7,7 +19,7 @@ The production `npm run build` creates a same-origin, versioned model pack along
 - `npm run bundle-models:dry-run` lists the model pack without downloading it.
 - `npm run build` downloads and packages the full model set; the build environment must be able to reach the upstream model hosts.
 - `npm run build:app-only` builds the UI without weights for fast local verification. It is not a deployable speech-model release; generation will report that the model pack is missing.
-- Expect roughly **0.85 GB** of weights before compression. The hosting provider must support the total static deployment and individual 20 MiB model chunks. Only the selected model is fetched from the app's own origin into local browser storage when used; inference remains in the browser.
+- Expect roughly **1 GB** of weights before compression. The hosting provider must support the total static deployment and individual 20 MiB model chunks. Only the selected model is fetched from the app's own origin into local browser storage when used; inference remains in the browser.
 - If a later app release changes a model's checksum, VidLyrics asks before fetching that model's replacement. Declining keeps the prior cached copy when it is still available.
 
 Audio import tries the browser's decoder first, then same-origin bundled local decoders for MP3, AAC/ADTS, FLAC, Ogg Vorbis/Opus, WAV, AIFF, CAF, AMR/GSM, WMA, APE, AC-3/E-AC-3, WavPack, TTA, Musepack, DSF/DFF, QOA, and MOD/XM/S3M/IT modules. AAC and common 16/24-bit mono/stereo ALAC tracks also have local fallbacks in MP4/M4A/MOV/3GP containers. File signatures take precedence over extensions and MIME labels, and unknown binary files can be attempted. Other codecs in MP4-family files, plus WebM/MKV and AVI, still depend on the browser's native codec support; no finite decoder pack can read every proprietary, encrypted, malformed, or future codec. Audio stays on-device.

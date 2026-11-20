@@ -73,9 +73,10 @@ export function layoutWords(
   const flush = () => {
     if (current.length === 0) return;
     // Trailing spaces never count toward the row width.
+    while (current[current.length - 1]?.isSpace) current.pop();
     let width = 0;
     for (const t of current) width += t.widthPx;
-    rows.push({ tokens: current, widthPx: Math.max(0, width) });
+    if (current.length) rows.push({ tokens: current, widthPx: Math.max(0, width) });
     current = [];
     currentWidth = 0;
   };
@@ -84,6 +85,11 @@ export function layoutWords(
     const display = options.uppercase ? text.toUpperCase() : text;
     const widthPx = measurer.width(display) + letterSpacing * Math.max(0, graphemes(display).length - 1);
     const token: LayoutToken = { text: display, wordIndex, widthPx, isSpace };
+
+    if (isSpace && (current.length === 0 || currentWidth + widthPx > maxWidth)) {
+      flush();
+      return;
+    }
 
     if (widthPx > maxWidth) {
       // Break a single over-wide token across rows, grapheme by grapheme.
@@ -105,23 +111,33 @@ export function layoutWords(
       return;
     }
 
-    if (!isSpace && currentWidth + widthPx > maxWidth && current.length > 0) flush();
+    if (!isSpace && currentWidth + widthPx > maxWidth && current.length > 0) {
+      // Segmenter emits punctuation as its own timed token. Don't orphan a
+      // comma or full stop if its preceding word fits with it on a fresh row.
+      const last = current[current.length - 1]!;
+      if (!last.isSpace && /^[.,;:!?，。！？、]+$/u.test(display) && last.widthPx + widthPx <= maxWidth) {
+        current.pop();
+        flush();
+        current.push(last);
+        currentWidth = last.widthPx;
+      } else {
+        flush();
+      }
+    }
     current.push(token);
     currentWidth += widthPx;
   };
 
   // Reconstruct the spacing between words so wrapping measures honestly.
-  let lastEnd = 0;
   for (const word of words) {
     const isSpace = word.text.trim().length === 0;
-    pushToken(word.text, word.index, isSpace);
-    lastEnd = word.index;
+    if (isSpace && /[\r\n]/.test(word.text)) flush();
+    else pushToken(word.text, word.index, isSpace);
   }
   flush();
 
   const filtered = rows.filter((r) => r.tokens.some((t) => !t.isSpace));
   const maxWidthPx = filtered.reduce((m, r) => Math.max(m, r.widthPx), 0);
-  void lastEnd;
   return {
     rows: filtered,
     heightPx: Math.max(0, filtered.length) * options.lineHeightPx,
