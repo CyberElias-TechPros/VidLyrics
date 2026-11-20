@@ -36,7 +36,7 @@ export function createMeasureFn(fontStack: string): MeasureFn {
     const existing = byFont.get(key);
     if (existing) return existing;
 
-    if (!ctx) return { width: (text: string) => text.length * fontSizePx * 0.52 + letterSpacingPx * Math.max(0, text.length - 1) };
+    if (!ctx) return { width: (text: string) => text.length * fontSizePx * 0.52 };
 
     const cache = new Map<string, number>();
     const measurer: Measurer = {
@@ -44,8 +44,7 @@ export function createMeasureFn(fontStack: string): MeasureFn {
         const cached = cache.get(text);
         if (cached !== undefined) return cached;
         if (ctx.font !== font) ctx.font = font;
-        let width = ctx.measureText(text).width;
-        if (letterSpacingPx !== 0) width += letterSpacingPx * Math.max(0, text.length - 1);
+        const width = ctx.measureText(text).width; // layoutWords adds tracking once, per grapheme.
         if (cache.size >= MAX_ENTRIES) {
           const oldest = cache.keys().next().value;
           if (oldest !== undefined) cache.delete(oldest);

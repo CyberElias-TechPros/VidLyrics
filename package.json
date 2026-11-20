@@ -20,9 +20,12 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run typecheck && npm run test && npm run build:app-only"
+    "verify": "npm run typecheck && npm run test && npm run build:app-only",
+    "test:e2e": "playwright test",
+    "test:release-voice": "playwright test --config playwright.release.config.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }

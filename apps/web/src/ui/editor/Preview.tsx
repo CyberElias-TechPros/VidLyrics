@@ -4,7 +4,7 @@ import { buildScene, compositionSize } from '../../core/render/scene';
 import { renderFrame } from '../../core/render/frame';
 import { createMeasureFn } from '../../media/canvasMeasurer';
 import { getSceneImages } from '../../media/session';
-import { useDevicePixelRatio, useRafLoop } from '../../lib/hooks';
+import { useRafLoop } from '../../lib/hooks';
 import { formatTimecode } from '../../core/time';
 
 /**
@@ -27,7 +27,6 @@ export function Preview() {
   const showGuides = useEditor((s) => s.showGuides);
   const showHeat = useEditor((s) => s.showHeat);
   const imageAssetsVersion = useEditor((s) => s.imageAssetsVersion);
-  const dpr = useDevicePixelRatio();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playheadRef = useRef(playheadUs);
@@ -58,14 +57,6 @@ export function Preview() {
     renderFrame(ctx, scene, playheadUs, { measure, showGuides, showHeat });
   }, [scene, measure, showGuides, showHeat, width, height, playheadUs, playing]);
 
-  // Size the backing store to the composition, scaled for the display.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = width;
-    canvas.height = height;
-  }, [width, height]);
-
   useRafLoop(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -74,12 +65,12 @@ export function Preview() {
     renderFrame(ctx, scene, playheadRef.current, { measure, showGuides, showHeat });
   }, playing);
 
-  void dpr;
-
   return (
     <div className="ed-preview">
       <canvas
         ref={canvasRef}
+        width={width}
+        height={height}
         className="ed-preview-canvas"
         style={{ aspectRatio: `${width} / ${height}`, width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%' }}
         role="img"

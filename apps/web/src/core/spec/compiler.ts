@@ -249,10 +249,10 @@ export function compileVideoSpec(spec: VideoSpec, options: CompileSpecOptions = 
   const lastSceneEnd = lines.reduce((max, l) => Math.max(max, l.end), 0);
   const introUs = design.intro.enabled ? design.intro.durationUs : 0;
   const outroUs = design.outro.enabled ? design.outro.durationUs : 0;
-  const sceneSpanUs = lastSceneEnd > 0 ? lastSceneEnd + usFromMs(200) : usFromSeconds(5);
-  const totalCompositionUs = Math.max(
+  const totalCompositionUs = introUs + outroUs + Math.max(
     base.audio?.durationUs ?? 0,
-    introUs + sceneSpanUs + outroUs
+    base.voiceover?.enabled ? base.voiceover.durationUs : 0,
+    lastSceneEnd + base.export.globalOffsetUs
   );
 
   // Resolve export resolution from aspect + preset.
@@ -262,16 +262,7 @@ export function compileVideoSpec(spec: VideoSpec, options: CompileSpecOptions = 
   const width = aspectId === 'custom' && design.customSize ? design.customSize.width : aspectDef.width;
   const height = aspectId === 'custom' && design.customSize ? design.customSize.height : aspectDef.height;
 
-  // Store voice preferences cleanly in notes envelope or voiceover metadata.
-  const updatedVoiceover = base.voiceover
-    ? {
-        ...base.voiceover,
-        voiceId: spec.voice?.voiceId ?? base.voiceover.voiceId,
-        voiceIdB: spec.voice?.voiceIdB !== undefined ? spec.voice.voiceIdB : (base.voiceover.voiceIdB ?? null),
-        pauseMs: spec.voice?.pauseMs ?? base.voiceover.pauseMs
-      }
-    : null;
-
+  // A requested voice is a preference, not metadata about an existing WAV.
   const voicePrefsNote = spec.voice
     ? encodeVoiceHint(base.meta.notes, spec.voice)
     : base.meta.notes;
@@ -287,7 +278,6 @@ export function compileVideoSpec(spec: VideoSpec, options: CompileSpecOptions = 
       language: spec.language ?? base.meta.language,
       notes: voicePrefsNote
     },
-    voiceover: updatedVoiceover,
     lyrics: {
       source: 'spec',
       originalText: lines.map((l) => l.text).join('\n'),

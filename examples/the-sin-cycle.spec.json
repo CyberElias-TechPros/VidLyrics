@@ -1,0 +1,325 @@
+{
+  "kind": "vidlyrics.spec",
+  "version": 1,
+  "title": "The Sin Cycle: Where Does It Break?",
+  "author": "Live In Jesus Name",
+  "theme": "nocturne",
+  "aspect": "9:16",
+  "fps": 30,
+  "voice": {
+    "voiceId": "en_US-ryan-medium",
+    "pauseMs": 300,
+    "wpm": 155
+  },
+  "scenes": [
+    {
+      "layout": "title",
+      "kicker": "FAITH • GRACE • FREEDOM",
+      "text": "Why Do You Keep Falling Into the Same Sin?",
+      "subtext": "Understanding the sin cycle and discovering where it breaks.",
+      "narration": "Have you ever promised God you would never do it again, only to find yourself repeating the same mistake? Why does the cycle keep coming back, and where does it finally break?",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "zoom",
+      "transition": "fade",
+      "accent": "#ffb454",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#070911",
+          "#14233d",
+          "#2b193f"
+        ],
+        "motion": 0.3,
+        "scrim": 0.38
+      }
+    },
+    {
+      "layout": "quote",
+      "kicker": "ROMANS 7:19",
+      "text": "For the good that I would I do not: but the evil which I would not, that I do.",
+      "subtext": "Romans 7:19 • KJV",
+      "narration": "In Romans chapter seven, Paul describes a struggle many believers understand: wanting to do what is right, yet repeatedly doing what they know is wrong.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "rise",
+      "transition": "fade",
+      "accent": "#ffb454",
+      "background": {
+        "kind": "gradient",
+        "colors": [
+          "#101827",
+          "#24172f"
+        ],
+        "motion": 0.2,
+        "scrim": 0.4
+      }
+    },
+    {
+      "layout": "caption",
+      "kicker": "THE HIDDEN PATTERN",
+      "text": "A mistake becomes a cycle when failure leads to condemnation, and condemnation prepares the ground for another failure.",
+      "narration": "The problem is not simply that you fall. It is what happens afterward: the accusations, the shame, the loss of hope, and the return to the very pattern you wanted to escape.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "blur",
+      "transition": "slide",
+      "accent": "#fb7185",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#160d1b",
+          "#3a1529",
+          "#111827"
+        ],
+        "motion": 0.25,
+        "scrim": 0.4
+      }
+    },
+    {
+      "layout": "chart",
+      "kicker": "THE SIN CYCLE",
+      "text": "Three stages that can keep repeating",
+      "chart": [
+        {
+          "label": "Trigger",
+          "value": 35,
+          "color": "#38bdf8"
+        },
+        {
+          "label": "Action",
+          "value": 25,
+          "color": "#fb7185"
+        },
+        {
+          "label": "Condemnation",
+          "value": 40,
+          "color": "#ffb454"
+        }
+      ],
+      "narration": "Think of the cycle in three stages. First, a trigger. Second, the action you regret. Third, the verdict you pronounce over yourself afterward. That final stage can influence what happens next.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "rise",
+      "transition": "fade",
+      "accent": "#38bdf8",
+      "background": {
+        "kind": "solid",
+        "colors": [
+          "#090f1d",
+          "#090f1d"
+        ],
+        "motion": 0.1,
+        "scrim": 0.25
+      }
+    },
+    {
+      "layout": "bullets",
+      "kicker": "STAGE 01 • THE TRIGGER",
+      "text": "It often begins before the visible failure.",
+      "items": [
+        "Stress or criticism",
+        "Boredom or loneliness",
+        "An old habit or familiar temptation"
+      ],
+      "narration": "The trigger might be stress, criticism, loneliness, boredom, or a familiar temptation. Recognising what comes before the behaviour helps you understand the pattern instead of treating every failure as an isolated event.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "wordCascade",
+      "transition": "slide",
+      "accent": "#38bdf8",
+      "background": {
+        "kind": "gradient",
+        "colors": [
+          "#071526",
+          "#102e45"
+        ],
+        "motion": 0.2,
+        "scrim": 0.35
+      }
+    },
+    {
+      "layout": "caption",
+      "kicker": "STAGE 02 • THE DEED",
+      "text": "The moment passes. The regret remains.",
+      "narration": "Then comes the action. You react in anger, return to an unhealthy habit, or make a choice you regret. The moment may be brief, but what you tell yourself afterward can last much longer.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "zoom",
+      "transition": "fade",
+      "accent": "#fb7185",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#190e19",
+          "#381927",
+          "#171326"
+        ],
+        "motion": 0.25,
+        "scrim": 0.42
+      }
+    },
+    {
+      "layout": "quote",
+      "kicker": "STAGE 03 • THE VERDICT",
+      "text": "I always do this. I will never change. What kind of Christian am I?",
+      "subtext": "The inner accusations that turn a failure into an identity.",
+      "narration": "Here is where the cycle can become stronger. Instead of saying, I did something wrong, you begin saying, I am hopeless. You withdraw from prayer, avoid Scripture, and begin to believe that change is impossible.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "blur",
+      "transition": "fade",
+      "accent": "#ffb454",
+      "background": {
+        "kind": "gradient",
+        "colors": [
+          "#170d20",
+          "#35152d"
+        ],
+        "motion": 0.3,
+        "scrim": 0.42
+      }
+    },
+    {
+      "layout": "stat",
+      "kicker": "THE TURNING POINT",
+      "text": "The verdict does not have to define you.",
+      "value": "Romans 8:1",
+      "subtext": "There is therefore now no condemnation to them which are in Christ Jesus.",
+      "narration": "But Romans chapter eight, verse one, brings a powerful answer: there is now no condemnation for those who are in Christ Jesus. Your failure must be confronted, but condemnation does not have to become your identity.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "spring",
+      "transition": "wipe",
+      "accent": "#86efac",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#061c19",
+          "#123a35",
+          "#10233b"
+        ],
+        "motion": 0.35,
+        "scrim": 0.3
+      }
+    },
+    {
+      "layout": "quote",
+      "kicker": "CONFESSION AND CLEANSING",
+      "text": "If we confess our sins, he is faithful and just to forgive us our sins, and to cleanse us from all unrighteousness.",
+      "subtext": "1 John 1:9 • KJV",
+      "narration": "First John chapter one, verse nine, reminds us that confession leads us to God's forgiveness and cleansing. Confession is not an invitation to remain trapped in shame. It is an opportunity to acknowledge the truth, receive God's mercy, and turn away from sin.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "rise",
+      "transition": "fade",
+      "accent": "#86efac",
+      "background": {
+        "kind": "gradient",
+        "colors": [
+          "#0b1b1b",
+          "#173b32"
+        ],
+        "motion": 0.2,
+        "scrim": 0.32
+      }
+    },
+    {
+      "layout": "bullets",
+      "kicker": "PRACTICAL STEPS",
+      "text": "How to begin breaking the cycle",
+      "items": [
+        "Identify the trigger behind the behaviour.",
+        "Confess honestly and receive God's forgiveness.",
+        "Replace self-condemnation with Scripture.",
+        "Change the circumstances that repeatedly lead you into temptation.",
+        "Seek trusted accountability and professional support when needed."
+      ],
+      "narration": "So what can you do? Identify your triggers. Confess honestly and receive God's forgiveness. Renew your mind with Scripture. Put practical boundaries in place. And when a habit feels impossible to overcome alone, seek wise counsel, trusted accountability, or professional help.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "wordCascade",
+      "transition": "slide",
+      "accent": "#38bdf8",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#091525",
+          "#142a43",
+          "#102d32"
+        ],
+        "motion": 0.2,
+        "scrim": 0.32
+      }
+    },
+    {
+      "layout": "quote",
+      "kicker": "THE HIGHER LAW",
+      "text": "For the law of the Spirit of life in Christ Jesus hath made me free from the law of sin and death.",
+      "subtext": "Romans 8:2 • KJV",
+      "narration": "Romans eight, verse two, points us to the freedom found in the Spirit of life in Christ Jesus. Grace is not permission to continue in sin. It is the foundation for a new way of living, sustained by God's truth and the Spirit's work in us.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "rise",
+      "transition": "fade",
+      "accent": "#c4b5fd",
+      "background": {
+        "kind": "gradient",
+        "colors": [
+          "#10142b",
+          "#27204a",
+          "#153348"
+        ],
+        "motion": 0.3,
+        "scrim": 0.3
+      }
+    },
+    {
+      "layout": "caption",
+      "kicker": "REMEMBER THIS",
+      "text": "Temptation is not the same as sin. A struggle is not proof that change is impossible.",
+      "narration": "Remember, experiencing temptation does not mean you have already sinned. And struggling does not mean you cannot grow. Take responsibility for your choices without surrendering to hopelessness.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "fade",
+      "transition": "fade",
+      "accent": "#ffb454",
+      "background": {
+        "kind": "solid",
+        "colors": [
+          "#111827",
+          "#111827"
+        ],
+        "motion": 0.1,
+        "scrim": 0.3
+      }
+    },
+    {
+      "layout": "title",
+      "kicker": "YOUR NEXT STEP",
+      "text": "Stop Rehearsing Condemnation. Start Walking in Grace.",
+      "subtext": "Read Romans 7 and 8. Renew your mind. Take one practical step toward change today.",
+      "narration": "The sin cycle does not have to be the story of your life. Bring your failure into the light, receive God's forgiveness, renew your mind, and take the next faithful step. You are called not to live in condemnation, but to walk in the freedom Christ provides. If this message encouraged you, share it with someone who needs hope today.",
+      "duration": "auto",
+      "speaker": "A",
+      "enter": "zoom",
+      "transition": "fade",
+      "accent": "#86efac",
+      "background": {
+        "kind": "mesh",
+        "colors": [
+          "#071c1a",
+          "#12382e",
+          "#1b2545"
+        ],
+        "motion": 0.3,
+        "scrim": 0.3
+      }
+    }
+  ],
+  "outro": {
+    "title": "Walk in Grace",
+    "subtitle": "Like, share, and subscribe for more Scripture-based teachings.",
+    "duration": 2.5
+  }
+}

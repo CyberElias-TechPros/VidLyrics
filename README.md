@@ -1,5 +1,15 @@
 # BUILD PROMPT — Lyrics Video Studio
 
+## From a chat script to a video (web studio)
+
+1. Open **Script to video** and paste prose or one complete `vidlyrics.spec` JSON object. For JSON, choose **Apply video spec**. A single JSON code fence and Markdown-escaped brackets/underscores are supported. A validation error keeps your draft and the existing timeline. Applying a spec is undoable.
+2. Scrub the timeline to check the visible copy. `text` is the headline or caption; `kicker`, `subtext`, `value`, `items`, and `chart` supply layout-specific details. `narration` is a **spoken override**, not a second on-screen paragraph. For long passages, use several scenes for readability.
+3. Select **Auto-time scenes to speech → Generate & sync speech** if you want voiceover. The editor estimates durations until speech is generated. Preview, then export the MP4. Reopen saved work under **Projects**.
+
+An importable [13-scene portrait example](examples/the-sin-cycle.spec.json) doubles as a regression fixture. Run `npm ci && npm run verify` for type checks, unit tests and the app-only build. For the browser checks run `npx playwright install --with-deps chromium` then `npm run test:e2e`. They exercise paste, undo/redo, persistence, invalid input and an actual silent MP4 export. For the production speech check, run `npm run build` (full pack) and `npm run test:release-voice`, or run the manual **Verify production speech export** workflow. This builds a real two-scene Ryan voiceover, reopens the saved project and decodes the downloaded MP4 to check for audible speech, matching track durations and a visible outro. It requires an actual model pack, not the app-only build. Test other supported browsers separately.
+
+Export probes the device for the selected video settings. If needed, the studio notifies you and uses another supported codec without changing the saved spec. For audio it prefers AAC, then Opus in MP4 for compatible 48 kHz mono/stereo tracks, then a separate WAV. Some older players require H.264/AAC.
+
 ## Current speech-model packaging (2026-10-08)
 
 The production `npm run build` creates a same-origin, versioned model pack alongside the app. It includes Whisper Tiny/Base and every Piper voice offered in the editor. The packer downloads the weights during the release build, verifies Piper files against upstream checksums, includes each voice's upstream `MODEL_CARD` plus the Whisper MIT notice, and splits files into 20 MiB chunks for static hosting. Large model binaries are generated under `apps/web/public/models/` and are intentionally ignored by Git.

@@ -525,7 +525,7 @@ export function buildAiSpecPrompt(): string {
     {
       "layout": "title | caption | stat | bullets | quote | code | chart",
       "kicker": "OPTIONAL EYEBROW OR FILENAME",
-      "text": "Spoken narration or scene headline (required)",
+      "text": "On-screen headline or caption (required)",
       "value": "Required for stat layout (e.g. '10x', '$0', '99.5%')",
       "subtext": "Optional supporting line or quote author",
       "narration": "Optional spoken override for local TTS (helpful on code/chart/stat scenes)",
@@ -545,6 +545,7 @@ export function buildAiSpecPrompt(): string {
 Guidelines:
 - Split the script into punchy 3–6 second scenes mixing \`title\`, \`bullets\`, \`stat\`, \`chart\`, \`code\`, \`quote\`, and \`caption\` layouts where they fit naturally.
 - Use \`"duration": "auto"\` so VidLyrics's local Piper TTS can auto-sync exact scene durations to spoken voiceover.
+- Put words viewers should see in "text" or "subtext". "narration" is for speech only. Split long passages across scenes instead of crowding a card.
 - Keep colors high-contrast and legible inside mobile/desktop safe areas.
 
 MY SCRIPT / TOPIC:

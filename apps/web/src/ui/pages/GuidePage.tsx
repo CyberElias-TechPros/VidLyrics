@@ -29,6 +29,18 @@ const SECTIONS = [
     )
   },
   {
+    id: 'video-script',
+    title: 'Turn an AI script into a narrated video',
+    body: (
+      <ol>
+        <li>Choose <strong>Script to video</strong> in the studio. Paste a complete VidLyrics JSON spec and choose <strong>Apply video spec</strong>. No audio file is needed. Plain prose still uses <strong>Build scenes</strong>.</li>
+        <li>Check the scene count and click scenes on the timeline to preview them. The headline, kicker, subtext, bullets and chart labels are visual; <code>narration</code> is the spoken script. To edit it without JSON, expand the selected scene’s layout controls.</li>
+        <li>For a voiced video, choose <strong>Auto-time scenes to speech</strong> and <strong>Generate &amp; sync speech</strong>. Before synthesis, automatic timings are estimates. Without a song or generated speech, the video is silent.</li>
+        <li>Preview the outro, then export. Use <strong>Projects</strong> to reopen local work or export the project to keep a backup. If a spec fails validation, correct the reported field and try again; the previous timeline stays intact.</li>
+      </ol>
+    )
+  },
+  {
     id: 'lyrics',
     title: 'Bring the lyrics',
     body: (
@@ -108,8 +120,9 @@ const SECTIONS = [
           audio does not land early against the video.
         </p>
         <p>
-          If your browser has no AAC encoder, you get a silent MP4 plus a WAV file rather than a failed
-          export. Mux them in any editor, or use Chrome or Edge for a single file.
+          The studio tries your selected video codec first and tells you if it needs to use another. AAC audio is preferred for compatibility. If it is unavailable, the studio tries Opus for a
+          48 kHz mono or stereo track (narration is resampled if needed). Older players may not
+          support MP4/Opus. If neither encoder works, the studio exports a silent MP4 and a separate WAV.
         </p>
       </>
     )

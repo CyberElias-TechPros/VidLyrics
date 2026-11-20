@@ -63,6 +63,8 @@ export function CodePanel() {
   );
 
   const compileAndApply = (source: string, options: { coalesce?: boolean; notifyOnSuccess?: boolean } = {}): boolean => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = null;
     const parsed = parseVideoSpecJson(source);
     if (!parsed.ok || !parsed.spec) {
       setIssues(parsed.issues);
@@ -160,13 +162,15 @@ export function CodePanel() {
   };
 
   const formatCode = () => {
-    try {
-      const formatted = `${JSON.stringify(JSON.parse(code), null, 2)}\n`;
-      setCode(formatted);
-      compileAndApply(formatted, { coalesce: true });
-    } catch (error) {
-      setIssues([{ path: 'JSON', message: error instanceof Error ? error.message : 'Cannot format invalid JSON.' }]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const parsed = parseVideoSpecJson(code);
+    if (!parsed.spec) {
+      setIssues(parsed.issues);
+      return;
     }
+    const formatted = `${JSON.stringify(parsed.spec, null, 2)}\n`;
+    setCode(formatted);
+    compileAndApply(formatted, { coalesce: true });
   };
 
   const syncSpeechFromSpec = () => {
@@ -313,6 +317,7 @@ export function CodePanel() {
               checked={liveSync}
               onChange={(e) => {
                 const enabled = e.target.checked;
+                if (debounceRef.current) clearTimeout(debounceRef.current);
                 setLiveSync(enabled);
                 if (enabled) compileAndApply(code, { coalesce: true });
               }}
@@ -332,12 +337,8 @@ export function CodePanel() {
             focusedRef.current = true;
           }}
           onBlur={() => {
+            // Keep the draft: blur fires before an Apply or Format button click.
             focusedRef.current = false;
-            if (issues.length === 0) {
-              const latest = serialiseVideoSpec(useEditor.getState().project);
-              lastAppliedJsonRef.current = latest;
-              setCode(latest);
-            }
           }}
           onChange={(e) => onCodeChange(e.target.value)}
           onKeyDown={onKeyDown}

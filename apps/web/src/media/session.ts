@@ -9,7 +9,7 @@ import { appError, type ErrorCode } from '../core/errors';
 import { sha256Hex, sanitizeFileName, validateAudioFile, validateAudioDuration, extensionOf, MAX_AUDIO_BYTES, IMAGE_EXTENSIONS } from '../core/validation/files';
 import { decodeAudioFile, DecodeError } from './audio/decode';
 import { PlaybackEngine } from './audio/player';
-import { exportVideo, downloadBlob, isExportSupported, checkAudioEncoderSupport, encodeWav, ExportError } from './export/encoder';
+import { exportVideo, downloadBlob, isExportSupported, selectMp4Audio, encodeWav, ExportError } from './export/encoder';
 import { createMeasureFn } from './canvasMeasurer';
 import { buildScene } from '../core/render/scene';
 import { detectBeatGrid } from '../core/audio/beats';
@@ -387,13 +387,16 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
       contentHash,
       createdAt: Date.now()
     };
-    const peaksRecord: AssetRecord = { ...audioRecord, id: peaksAssetId, kind: 'peaks' };
+    const peakData = peaksBlob(result.peaks);
+    const peaksRecord: AssetRecord = { ...audioRecord, id: peaksAssetId, kind: 'peaks', mimeType: peakData.type,
+      bytes: peakData.size, contentHash: await sha256Hex(await peakData.arrayBuffer()) };
+    if (!isCurrentImport()) return;
 
     // Assets are stored only after a successful decode, so a rejected file never
     // leaves an orphan in IndexedDB.
     await saveAsset(audioRecord, buffer);
     if (!isCurrentImport()) return;
-    await saveAsset(peaksRecord, peaksBlob(result.peaks));
+    await saveAsset(peaksRecord, peakData);
     if (!isCurrentImport()) return;
 
     const beatGrid = result.spectrum ? detectBeatGrid(result.spectrum) : null;
@@ -1316,13 +1319,13 @@ export async function runExport(): Promise<void> {
     let exportSampleRate = 48_000;
     let exportChannels = 1;
     let audioStartUs = 0;
-    let audioSupported = false;
+    let audioPlan: Awaited<ReturnType<typeof selectMp4Audio>> = null;
     let compactAudio = false;
 
     if (project.export.includeAudio && project.audio && decoded) {
       exportSampleRate = decoded.sampleRate;
       exportChannels = decoded.channels;
-      audioSupported = await checkAudioEncoderSupport(exportSampleRate, exportChannels);
+      audioPlan = await selectMp4Audio(exportSampleRate, exportChannels, project.export.audioBitrate);
       if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
       if (includeVoiceover && voiceoverMeta && voiceoverAudio) {
         audioForExport = mixVoiceover({
@@ -1344,11 +1347,8 @@ export async function runExport(): Promise<void> {
         audioForExport = decoded.interleaved;
       }
     } else if (project.export.includeAudio && !project.audio && includeVoiceover && voiceoverMeta && voiceoverAudio) {
-      // Standalone script-to-video voiceover: prefer native rate, fall back to 48 kHz AAC.
-      const nativeOk = await checkAudioEncoderSupport(voiceoverAudio.sampleRate, 1);
-      const fallbackRate = 48_000;
-      const targetRate = nativeOk ? voiceoverAudio.sampleRate : fallbackRate;
-      audioSupported = nativeOk || (await checkAudioEncoderSupport(fallbackRate, 1));
+      audioPlan = await selectMp4Audio(voiceoverAudio.sampleRate, 1, project.export.audioBitrate, true);
+      const targetRate = audioPlan?.sampleRate ?? voiceoverAudio.sampleRate;
       if (signal.aborted || !isCurrentExport()) throw new ExportError('Export was cancelled.', 'CANCELLED');
       const rendered = renderStandaloneVoiceover({
         voice: voiceoverAudio.pcm,
@@ -1367,17 +1367,20 @@ export async function runExport(): Promise<void> {
     }
 
     const hasIntendedAudio = audioForExport !== null;
-    if (hasIntendedAudio && !audioSupported) {
+    if (hasIntendedAudio && !audioPlan) {
       store.notify({
         kind: 'warning',
         title: 'Audio will be exported separately',
-        detail: 'This browser has no AAC encoder, so you will get a silent MP4 plus a WAV file containing the audio track. Mux them in any editor, or use Chrome or Edge for a single file.'
+        detail: 'No supported MP4 audio encoder was found for this track. You will get a silent MP4 and a separate WAV to combine in a video editor.'
       });
     }
 
+    if (audioPlan?.codec === 'opus') {
+      store.notify({ kind: 'info', title: 'Using Opus audio in MP4', detail: 'AAC is unavailable on this device. The MP4 will include an Opus soundtrack; older players may not support it.' });
+    }
     const output = await exportVideo({
       scene,
-      interleaved: hasIntendedAudio && audioSupported ? audioForExport : null,
+      interleaved: hasIntendedAudio && audioPlan ? audioForExport : null,
       sampleRate: exportSampleRate,
       channels: exportChannels,
       width: project.export.width,
@@ -1386,12 +1389,14 @@ export async function runExport(): Promise<void> {
       videoBitrate: project.export.videoBitrate,
       audioBitrate: project.export.audioBitrate,
       codec: project.export.codec,
-      includeAudio: hasIntendedAudio && audioSupported,
+      audioCodec: hasIntendedAudio && audioPlan ? audioPlan.codec : null,
       rangeStartUs: exportRangeStartUs,
       rangeEndUs: exportRangeEndUs,
       audioStartUs,
       renderOptions: { measure, showHeat: false },
       signal,
+      onCodecFallback: (actual) => store.notify({ kind: 'info', title: `Using ${actual.toUpperCase()} video`,
+        detail: `This device cannot encode the requested ${project.export.codec.toUpperCase()} settings. Your project settings have not changed.` }),
       onProgress: (progress) => {
         if (!isCurrentExport()) return;
         store.setRender({
@@ -1418,7 +1423,7 @@ export async function runExport(): Promise<void> {
     });
     downloadBlob(output.blob, fileName);
 
-    if (hasIntendedAudio && !audioSupported && audioForExport) {
+    if (hasIntendedAudio && !audioPlan && audioForExport) {
       const startSample = compactAudio ? 0 : Math.floor((exportRangeStartUs / 1_000_000) * exportSampleRate);
       const endSample = compactAudio
         ? Math.floor(audioForExport.length / exportChannels)
@@ -1484,11 +1489,13 @@ export function importVideoSpecText(text: string, label = 'Import video spec'): 
     store.notify({
       kind: 'error',
       title: 'Invalid video spec',
-      detail: first ? `${first.path}: ${first.message}` : 'Could not validate spec JSON.'
+      detail: first ? `${first.path}${first.line ? ` (line ${first.line})` : ''}: ${first.message}` : 'Could not validate spec JSON.'
     });
     return false;
   }
+  engine?.pause();
   store.applyVideoSpec(parsed.spec, { label, resetPlayhead: true });
+  seekTo(useEditor.getState().playheadUs);
   void hydrateImagesFromStorage();
   store.notify({
     kind: 'success',
@@ -1561,7 +1568,7 @@ export async function persist(): Promise<void> {
   const store = useEditor.getState();
   try {
     await saveProject(store.project);
-    store.markSaved();
+    if (useEditor.getState().project === store.project) store.markSaved();
   } catch (error) {
     if (error instanceof StorageQuotaError) {
       const estimate = await estimateStorage();
@@ -1620,7 +1627,7 @@ export function projectTimelineDurationUs(project: Project): number {
   const voiceDur = project.voiceover?.enabled ? project.voiceover.durationUs : 0;
   const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
   const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
-  const bodyUs = Math.max(project.audio?.durationUs ?? 0, voiceDur, lastLine);
+  const bodyUs = Math.max(project.audio?.durationUs ?? 0, voiceDur, lastLine + project.export.globalOffsetUs);
   return Math.max(introUs + bodyUs + outroUs, usFromSeconds(1));
 }
 
