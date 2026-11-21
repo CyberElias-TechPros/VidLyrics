@@ -1,4 +1,4 @@
-import type { Project, SceneVisual } from '../types';
+import type { Project, SceneVisual, EnergyMarker } from '../types';
 import type { SpectrumEnvelope } from '../audio/spectrum';
 
 export const treatments = {
@@ -33,12 +33,13 @@ export function planShots(project: Project, env: SpectrumEnvelope | null, family
   return project.lyrics.lines.map((line, index) => {
     const energy = energies[index];
     const section = sections.get(line.sectionId ?? '');
-    const lift = (energy != null && energy > low + 0.04 && energy >= upper) || ['CHORUS','HOOK','REFRAIN'].includes(section?.kind ?? '');
-    const quiet = energy != null && energy < 0.025;
+    const marker = project.audio?.energyMap?.reduce<EnergyMarker | null>((prev, m) => m.start <= (line.start + line.end) / 2 && (!prev || m.start > prev.start) ? m : prev, null);
+    const lift = marker ? marker.level === 'lift' : (energy != null && energy > low + 0.04 && energy >= upper) || ['CHORUS','HOOK','REFRAIN'].includes(section?.kind ?? '');
+    const quiet = marker ? marker.level === 'quiet' : energy != null && energy < 0.025;
     const moving = !still && !quiet;
     const world = family === 'afterglow' ? 'horizon' : family === 'sanctuary' ? 'mesh' : 'gradient';
     return { id: line.id, text: line.text,
-      reason: [section?.label || `Scene ${index + 1}`, energy == null ? 'no audio analysis' : `${Math.round(energy * 100)}% spectral energy`, lift ? 'emphasis' : 'hold'].join(' · '),
+      reason: [section?.label || `Scene ${index + 1}`, energy == null ? 'no audio analysis' : `${Math.round(energy * 100)}% spectral energy`, marker ? `accepted ${marker.level}` : lift ? 'emphasis' : 'hold'].join(' · '),
       visual: { accent: palette.accent, enter: moving ? (lift ? 'rise' : 'fade') : 'none', exit: moving ? 'fade' : 'none',
         transition: moving ? (lift && family !== 'editorial' ? 'wipe' : 'fade') : 'none',
         background: { kind: world, colors: [...palette.colors], scrim: lift ? 0.32 : 0.46, motion: moving ? (lift ? 0.7 : 0.24) : 0 } }

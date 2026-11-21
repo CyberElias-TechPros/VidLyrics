@@ -80,3 +80,10 @@ it('round-trips resolved user styles without sharing mutations, title, media or 
   expect(applied.typography.weight).toBe(800);expect(applied.motion.enter).toBe('rise');expect(applied.background).toBe(b.design.background);
   expect(()=>readPresets('{"version":99,"presets":[]}')).toThrow();
 });
+
+import { suggestEnergyMap } from '../src/core/audio/energyMap';
+it('separates dynamic changes without inventing a chorus during silence',()=>{
+  const env={frameUs:1e6,frameCount:6,bands:Uint8Array.of(0,0,30,30,100,100),bandMeans:new Float32Array(1),fftSize:1024,sampleRate:48000};
+  expect(suggestEnergyMap(env,6e6)).toEqual([{start:0,level:'quiet'},{start:2e6,level:'steady'},{start:4e6,level:'lift'}]);
+  expect(suggestEnergyMap({...env,bands:new Uint8Array(6)},6e6)).toEqual([{start:0,level:'quiet'}]);
+});

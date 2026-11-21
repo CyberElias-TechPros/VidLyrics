@@ -174,6 +174,7 @@ const designSchema = z.object({
 export const presetStyleSchema = designSchema.pick({ typography: true, motion: true, karaoke: true, accent: true });
 
 const audioSchema = z.object({
+  energyMap: z.array(z.object({ start: microseconds, level: z.enum(['quiet','steady','lift']) })).max(1000).optional(),
   assetId: z.string().max(128),
   fileName: z.string().max(512),
   mimeType: z.string().max(128),

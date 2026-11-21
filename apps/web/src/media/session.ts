@@ -419,6 +419,7 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
       ...p,
       voiceover: preserveVoiceover ? p.voiceover : null,
       audio: {
+        ...(p.audio?.contentHash === contentHash && p.audio.energyMap ? { energyMap: p.audio.energyMap } : {}),
         assetId: audioAssetId,
         fileName: sanitizeFileName(file.name),
         mimeType: file.type || 'audio/mpeg',
@@ -429,7 +430,7 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
         peaksAssetId,
         contentHash
       },
-      export: { ...p.export, rangeStartUs: 0, rangeEndUs: result.durationUs },
+      export: preloaded && preserveVoiceover ? p.export : { ...p.export, rangeStartUs: 0, rangeEndUs: result.durationUs },
       meta: {
         ...p.meta,
         title: p.meta.title || sanitizeFileName(file.name).replace(/\.[^.]+$/, ''),

@@ -1,3 +1,4 @@
+import { EnergyMap } from "./EnergyMap";
 import { matchTranscript } from '../../core/timing/transcriptMatch';
 import { StyleLibrary } from './StyleLibrary';
 import { SceneDirector, TimingReview } from './ProductionTools';
@@ -667,6 +668,7 @@ export function DesignPanel() {
 
   return (
     <>
+      <EnergyMap />
       <SceneDirector />
       <StyleLibrary />
       <div className="ed-panel-section">
