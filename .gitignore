@@ -7,3 +7,9 @@ apps/web/.model-download-staging/
 *.local
 coverage/
 .DS_Store
+
+test-results/
+playwright-report/
+
+# Locally generated review videos (not source or release assets).
+/renders/

@@ -46,13 +46,14 @@ export interface ExportRequest {
   videoBitrate: number;
   audioBitrate: number;
   codec: 'h264' | 'vp9' | 'av1';
-  includeAudio: boolean;
+  audioCodec: 'aac' | 'opus' | null;
   rangeStartUs: Microseconds;
   rangeEndUs: Microseconds;
   /** Absolute music time represented by sample 0 in interleaved PCM. */
   audioStartUs?: Microseconds;
   renderOptions: Omit<RenderOptions, 'showGuides'>;
   onProgress?: (progress: ExportProgress) => void;
+  onCodecFallback?: (actual: ExportRequest['codec']) => void;
   signal?: AbortSignal;
 }
 
@@ -116,26 +117,40 @@ export function videoCodecString(codec: 'h264' | 'vp9' | 'av1', width: number, h
   return avcCodecString(width, height, fps);
 }
 
-export function isAudioEncodingSupported(sampleRate: number, channels: number): boolean {
-  if (typeof AudioEncoder === 'undefined') return false;
-  try {
-    return AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate, numberOfChannels: channels, bitrate: 128_000 }).then(
-      (r) => r.supported === true,
-      () => false
-    ) as unknown as boolean;
-  } catch {
-    return false;
+/** Probe the requested resolution and frame rate rather than assuming that a
+ * browser exposing WebCodecs has a licensed H.264 encoder. */
+export async function selectMp4Video(requested: ExportRequest['codec'], width: number, height: number, fps: number, bitrate: number) {
+  const candidates = new Set<ExportRequest['codec']>([requested, 'h264', 'vp9', 'av1']);
+  for (const codec of candidates) {
+    const profiles = [videoCodecString(codec, width, height, fps)];
+    if (codec === 'h264') profiles.push(avcCodecString(width, height, fps, 'baseline'));
+    for (const profile of profiles) {
+      const config: VideoEncoderConfig = { codec: profile, width, height, framerate: fps, bitrate, latencyMode: 'quality',
+        ...(codec === 'h264' ? { avc: { format: 'avc' as const } } : {}) };
+      try {
+        if ((await VideoEncoder.isConfigSupported(config)).supported) return { codec, config };
+      } catch { /* Probe the next MP4-compatible encoding. */ }
+    }
   }
+  throw new ExportError(`No supported MP4 video encoder for ${width}×${height} at ${fps} fps. Try a smaller export preset.`, 'ENCODER_FAILED');
 }
 
-export async function checkAudioEncoderSupport(sampleRate: number, channels: number): Promise<boolean> {
-  if (typeof AudioEncoder === 'undefined') return false;
-  try {
-    const result = await AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate, numberOfChannels: channels, bitrate: 128_000 });
-    return result.supported === true;
-  } catch {
-    return false;
+/** Prefer universally playable AAC. Only use MP4/Opus at its 48 kHz clock
+ * and with mono/stereo channel mapping supported by the muxer. */
+export async function selectMp4Audio(sampleRate: number, channels: number, bitrate: number, canResample = false):
+  Promise<{ codec: 'aac' | 'opus'; sampleRate: number } | null> {
+  if (typeof AudioEncoder === 'undefined') return null;
+  const rates = canResample && sampleRate !== 48_000 ? [sampleRate, 48_000] : [sampleRate];
+  for (const codec of ['aac', 'opus'] as const) {
+    for (const rate of rates) {
+      if (codec === 'opus' && (rate !== 48_000 || channels > 2)) continue;
+      try {
+        const config = { codec: codec === 'aac' ? 'mp4a.40.2' : 'opus', sampleRate: rate, numberOfChannels: channels, bitrate };
+        if ((await AudioEncoder.isConfigSupported(config)).supported) return { codec, sampleRate: rate };
+      } catch { /* A rejected probe is not a reason to discard the soundtrack. */ }
+    }
   }
+  return null;
 }
 
 /** AAC-LC encoder delay in samples. Fed as silence ahead of real audio. */
@@ -205,7 +220,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
 
   const {
     scene, interleaved, sampleRate, channels, width, height, fps, videoBitrate, audioBitrate,
-    codec, includeAudio, rangeStartUs, rangeEndUs, audioStartUs = 0, renderOptions, onProgress, signal
+    codec, audioCodec, rangeStartUs, rangeEndUs, audioStartUs = 0, renderOptions, onProgress, signal
   } = request;
 
   const aborted = () => signal?.aborted === true;
@@ -213,17 +228,21 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
 
   const durationUs = Math.max(0, rangeEndUs - rangeStartUs);
   const framesTotal = Math.max(1, Math.round(usToSeconds(durationUs) * fps));
-  const frameDurationUs = Math.round(1_000_000 / fps);
 
   // The scene's own clock starts at 0 of the composition; the export range is
   // expressed in the same clock, so frame i maps straight onto it.
   const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : document.createElement('canvas');
-  if (!(canvas instanceof OffscreenCanvas)) {
+  if (typeof OffscreenCanvas === 'undefined') {
     canvas.width = width;
     canvas.height = height;
   }
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: false });
   if (!ctx) throw new ExportError('Could not create a 2D rendering context.', 'ENCODER_FAILED');
+
+  // Scene geometry is in composition pixels. Scale the whole composition for
+  // a different output preset; preserve aspect ratio instead of cropping text.
+  const fit = Math.min(width / scene.width, height / scene.height);
+  ctx.setTransform(fit, 0, 0, fit, (width - scene.width * fit) / 2, (height - scene.height * fit) / 2);
 
   // Fonts must be resident before the first frame or frame 0 uses a fallback.
   if (typeof document !== 'undefined' && document.fonts) {
@@ -238,16 +257,19 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
     }
   }
 
+  const videoPlan = await selectMp4Video(codec, width, height, fps, videoBitrate);
+  if (videoPlan.codec !== codec) request.onCodecFallback?.(videoPlan.codec);
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
-    video: { codec: codec === 'h264' ? 'avc' : codec === 'vp9' ? 'vp9' : 'av1', width, height },
-    audio: includeAudio && interleaved ? { codec: 'aac', numberOfChannels: channels, sampleRate } : undefined,
+    video: { codec: videoPlan.codec === 'h264' ? 'avc' : videoPlan.codec, width, height },
+    audio: audioCodec && interleaved ? { codec: audioCodec, numberOfChannels: channels, sampleRate } : undefined,
     fastStart: 'in-memory',
     firstTimestampBehavior: 'offset'
   });
 
   let bytesEncoded = 0;
   let framesDone = 0;
+  let encoderFailure: ExportError | null = null;
 
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => {
@@ -255,34 +277,11 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
       muxer.addVideoChunk(chunk, meta);
     },
     error: (error) => {
-      throw new ExportError(`Video encoder failed: ${error.message}`, 'ENCODER_FAILED');
+      encoderFailure = new ExportError(`Video encoder failed: ${error.message}`, 'ENCODER_FAILED');
     }
   });
 
-  videoEncoder.configure({
-    codec: videoCodecString(codec, width, height, fps),
-    width,
-    height,
-    bitrate: videoBitrate,
-    framerate: fps,
-    latencyMode: 'quality',
-    avc: { format: 'avc' }
-  });
-
   let audioEncoder: AudioEncoder | null = null;
-  const useAudio = includeAudio && interleaved !== null && (await checkAudioEncoderSupport(sampleRate, channels));
-  if (useAudio) {
-    audioEncoder = new AudioEncoder({
-      output: (chunk, meta) => {
-        bytesEncoded += chunk.byteLength;
-        muxer.addAudioChunk(chunk, meta);
-      },
-      error: (error) => {
-        throw new ExportError(`Audio encoder failed: ${error.message}`, 'ENCODER_FAILED');
-      }
-    });
-    audioEncoder.configure({ codec: 'mp4a.40.2', sampleRate, numberOfChannels: channels, bitrate: audioBitrate });
-  }
 
   const report = (state: RenderState) => {
     const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
@@ -302,6 +301,21 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
   report('PREPARING');
 
   try {
+    videoEncoder.configure(videoPlan.config);
+
+    if (audioCodec && interleaved) {
+      audioEncoder = new AudioEncoder({
+        output: (chunk, meta) => {
+          bytesEncoded += chunk.byteLength;
+          muxer.addAudioChunk(chunk, meta);
+        },
+        error: (error) => {
+          encoderFailure = new ExportError(`Audio encoder failed: ${error.message}`, 'ENCODER_FAILED');
+        }
+      });
+      audioEncoder.configure({ codec: audioCodec === 'aac' ? 'mp4a.40.2' : 'opus', sampleRate, numberOfChannels: channels, bitrate: audioBitrate });
+    }
+
     const sampleOffset = Math.floor(((rangeStartUs - audioStartUs) / 1_000_000) * sampleRate);
     const audioFramesTotal = Math.floor((durationUs / 1_000_000) * sampleRate);
     // Audio is emitted in ~50 ms blocks. Small blocks keep the muxer's
@@ -327,7 +341,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
         // audio lands where the video expects it instead of ~23 ms early.
         const timestampUs = Math.max(
           0,
-          Math.round((audioCursor / sampleRate) * 1_000_000) - Math.round((AAC_PRIMING_SAMPLES / sampleRate) * 1_000_000)
+          Math.round((audioCursor / sampleRate) * 1_000_000) - (audioCodec === 'aac' ? Math.round((AAC_PRIMING_SAMPLES / sampleRate) * 1_000_000) : 0)
         );
         const block = new AudioData({
           format: 'f32-planar',
@@ -344,14 +358,16 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
     };
 
     for (let frame = 0; frame < framesTotal; frame += 1) {
+      if (encoderFailure) throw encoderFailure;
       if (aborted()) {
         videoEncoder.close();
         audioEncoder?.close();
         throw new ExportError('Export was cancelled.', 'CANCELLED');
       }
 
-      const compositionTimeUs = rangeStartUs + frame * frameDurationUs;
-      const outputTimestamp = frame * frameDurationUs;
+      const outputTimestamp = frameToUs(frame, fps);
+      const compositionTimeUs = rangeStartUs + outputTimestamp;
+      const frameDurationUs = frameToUs(frame + 1, fps) - outputTimestamp;
 
       renderFrame(ctx as CanvasRenderingContext2D, scene, compositionTimeUs, renderOptions);
 
@@ -364,7 +380,8 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
       videoFrame.close();
 
       framesDone += 1;
-      pushAudio(compositionTimeUs - rangeStartUs);
+      pushAudio(frame === framesTotal - 1 ? durationUs : outputTimestamp + frameDurationUs);
+      if (audioEncoder && audioEncoder.encodeQueueSize > 16) await waitForDrain(audioEncoder);
 
       if (videoEncoder.encodeQueueSize > 8) await waitForDrain(videoEncoder, 4);
       if (framesDone % 10 === 0 || framesDone === framesTotal) {
@@ -378,6 +395,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
     await videoEncoder.flush();
     if (audioEncoder && audioEncoder.state !== 'closed') await audioEncoder.flush();
 
+    if (encoderFailure) throw encoderFailure;
     report('MUXING');
     muxer.finalize();
     const target = muxer.target as ArrayBufferTarget;
@@ -389,6 +407,7 @@ export async function exportVideo(request: ExportRequest): Promise<{ blob: Blob;
     report('COMPLETE');
     return { blob, frames: framesDone, bytes: blob.size, durationUs };
   } catch (error) {
+    if (encoderFailure) throw encoderFailure;
     if (error instanceof ExportError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     const code = /memory|alloc|heap/i.test(message) ? 'OUT_OF_MEMORY' : 'ENCODER_FAILED';

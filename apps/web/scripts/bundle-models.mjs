@@ -16,6 +16,8 @@ const outputRoot = join(publicRoot, 'models');
 const tempRoot = join(appRoot, '.model-download-staging');
 const maxChunkBytes = 20 * 1024 * 1024;
 const dryRun = process.argv.includes('--dry-run');
+// Upstream GGML file digests: ggml-org/whisper.cpp, models/README.md.
+const whisperSha1 = { tiny: 'bd577a113a864445d4c299885e0cb97d4ba92b5f', base: '465707469ff3a37a2b9b8d8f89f2f99de7299dac' };
 const whisperSources = {
   tiny: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
   base: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin'
@@ -31,7 +33,14 @@ function digestFile(path, algorithm = 'sha256') {
   });
 }
 
-async function download(url, destination, expected = null) {
+function piperIntegrity(file, name) {
+  if (!Number.isSafeInteger(file?.size_bytes) || file.size_bytes <= 0 || !/^[a-f0-9]{32}$/.test(file.md5_digest)) {
+    throw new Error(`Missing size or checksum for ${name} in the installed Piper metadata.`);
+  }
+  return { bytes: file.size_bytes, algorithm: 'md5', digest: file.md5_digest };
+}
+
+async function download(url, destination, expected) {
   const response = await fetch(url, { redirect: 'follow' });
   if (!response.ok || !response.body) {
     throw new Error(`Could not download ${url} (HTTP ${response.status}). The bundled-model build needs access to Hugging Face.`);
@@ -40,14 +49,13 @@ async function download(url, destination, expected = null) {
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
   const info = await stat(destination);
   const sha256 = await digestFile(destination);
-  const md5 = expected?.md5 ? await digestFile(destination, 'md5') : undefined;
-  if (expected?.bytes && info.size !== expected.bytes) {
+  if (expected.bytes !== undefined && info.size !== expected.bytes) {
     throw new Error(`Unexpected size for ${url}: got ${info.size}, expected ${expected.bytes}.`);
   }
-  if (expected?.md5 && md5 !== expected.md5) {
-    throw new Error(`Piper voice checksum mismatch for ${url}; refusing to ship an unverified model.`);
+  if (await digestFile(destination, expected.algorithm) !== expected.digest) {
+    throw new Error(`Checksum mismatch for ${url}; refusing to ship an unverified model.`);
   }
-  return { path: destination, bytes: info.size, sha256, ...(md5 ? { md5 } : {}) };
+  return { path: destination, bytes: info.size, sha256 };
 }
 
 async function splitIntoChunks(source, logicalPath, assetVersion, contentType) {
@@ -115,7 +123,8 @@ if (dryRun) {
     if (!modelInfo || !configInfo || !licenseInfo) {
       throw new Error(`Piper voice ${voice.id} must have an ONNX file, config, and upstream MODEL_CARD.`);
     }
-    console.log(`  Piper ${voice.id}: ${modelInfo.size_bytes.toLocaleString()} bytes; config and MODEL_CARD verified`);
+    for (const name of [path, configPath, licensePath]) piperIntegrity(entry.files[name], name);
+    console.log(`  Piper ${voice.id}: ${modelInfo.size_bytes.toLocaleString()} bytes; model, config and MODEL_CARD checksums available`);
   }
   console.log(`Chunk limit: ${maxChunkBytes / 1024 / 1024} MiB. Use npm run build for a release including all weights.`);
   process.exit(0);
@@ -132,7 +141,7 @@ try {
   const whisperLicenseInfo = await stat(whisperLicensePath);
   whisperLicense = { path: whisperLicensePath, bytes: whisperLicenseInfo.size, sha256: await digestFile(whisperLicensePath) };
   for (const [id, url] of Object.entries(whisperSources)) {
-    downloaded.push({ id: `whisper:${id}`, type: 'whisper', name: id, sourceUrl: url, file: await download(url, join(tempRoot, `${id}.bin`)) });
+    downloaded.push({ id: `whisper:${id}`, type: 'whisper', name: id, sourceUrl: url, file: await download(url, join(tempRoot, `${id}.bin`), { algorithm: 'sha1', digest: whisperSha1[id] }) });
   }
 
   const staticVoices = await readStaticVoiceData();
@@ -147,7 +156,7 @@ try {
       const expected = entry.files[sourcePath];
       if (!expected) throw new Error(`Piper metadata for ${voice.id} is missing ${sourcePath}.`);
       const suffix = sourcePath.endsWith('/MODEL_CARD') ? 'MODEL_CARD' : sourcePath.endsWith('.json') ? 'config.json' : 'model.onnx';
-      outputs[suffix] = await download(`${HF_BASE}/${sourcePath}`, join(tempRoot, `${voice.id}-${suffix}`), expected);
+      outputs[suffix] = await download(`${HF_BASE}/${sourcePath}`, join(tempRoot, `${voice.id}-${suffix}`), piperIntegrity(expected, sourcePath));
     }
     if (!outputs.MODEL_CARD) {
       throw new Error(`No Piper MODEL_CARD was found for ${voice.id}; refusing to package a voice without its attribution/licence file.`);

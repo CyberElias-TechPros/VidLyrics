@@ -13,9 +13,10 @@ import {
 } from './easing';
 import { energyAt, bandsAt } from '../audio/spectrum';
 import { beatStrength } from '../audio/beats';
-import { highlightTokens } from '../lyrics/segment';
 import {
   buildBlockFrame,
+  wrapTextRows,
+  type TextRowSpec,
   isBlockLayout,
   paintBlock,
   resolveSceneBackground,
@@ -87,7 +88,7 @@ export interface LineFrame {
   shadowOffsetY: number;
   glow: number;
   kicker: { text: string; opacity: number; fontSizePx: number } | null;
-  translation: { text: string; opacity: number; fontSizePx: number } | null;
+  translation: { rows: TextRowSpec[]; opacity: number; fontSizePx: number } | null;
   /** Lowest confidence on this line, so preview can flag uncertain timing. */
   minConfidence: number;
 }
@@ -208,7 +209,7 @@ export function computeFrameState(scene: Scene, timeUs: Microseconds, measure: M
     : null;
   const card = computeCard(scene, timeUs);
 
-  const visible = collectVisible(scene, musicTimeUs);
+  const visible = card ? [] : collectVisible(scene, musicTimeUs);
   const currentIndex = activeLineIndex(scene, musicTimeUs);
 
   const lines: LineFrame[] = [];
@@ -295,12 +296,37 @@ function buildLineFrame(
   const motion = design.motion;
 
   const style = line.style;
-  const fontSizePx = Math.round((style.sizeRatio ?? typography.sizeRatio) * scene.height);
-  const lineHeightPx = fontSizePx * typography.lineHeight;
-  const letterSpacingPx = typography.letterSpacing * fontSizePx;
+  let fontSizePx = Math.max(1, Math.round((style.sizeRatio ?? typography.sizeRatio) * scene.height));
   const weight = style.weight ?? typography.weight;
   const uppercase = style.uppercase ?? typography.uppercase;
   const align = style.align ?? typography.align;
+
+  const rawWords = line.words;
+  const tokens = rawWords.map((w, index) => ({ text: w.text, index }));
+  const kickerText = line.scene?.kicker?.trim().toUpperCase();
+  const translationText = (line.translation ?? line.scene?.subtext)?.trim() ?? '';
+  const measureCaption = (size: number) => {
+    const lineHeightPx = size * typography.lineHeight;
+    const letterSpacingPx = typography.letterSpacing * size;
+    const layout = layoutWords(tokens, measure(size, weight, letterSpacingPx), {
+      fontSizePx: size, lineHeightPx, maxWidthPx: box.contentWidth, letterSpacingPx, uppercase
+    });
+    const subSize = Math.max(1, Math.round(size * 0.42));
+    const sub = wrapTextRows(translationText, measure, {
+      fontSizePx: subSize, weight: Math.max(300, weight - 200), lineHeightPx: subSize * 1.35,
+      maxWidthPx: box.contentWidth, leftPx: box.contentLeft, topPx: 0, align
+    });
+    const kickerHeight = kickerText ? size * 0.8 : 0;
+    const subGap = sub.rows.length ? subSize * 0.45 : 0;
+    return { lineHeightPx, letterSpacingPx, layout, subSize, sub, kickerHeight, subGap,
+      height: kickerHeight + layout.heightPx + subGap + sub.heightPx };
+  };
+  let measured = measureCaption(fontSizePx);
+  while (measured.height > box.contentHeight && fontSizePx > 1) {
+    fontSizePx = Math.max(1, Math.floor(fontSizePx * Math.sqrt(box.contentHeight / measured.height)));
+    measured = measureCaption(fontSizePx);
+  }
+  const { lineHeightPx, letterSpacingPx, layout, subSize, sub, kickerHeight, subGap } = measured;
 
   // Entrance / exit progress, both derived from the same clock.
   const enterProgress = motion.enterUs > 0 ? clamp01((musicTimeUs - (line.start - motion.enterUs)) / motion.enterUs) : 1;
@@ -313,25 +339,6 @@ function buildLineFrame(
     exitProgress,
     fontSizePx,
     motion.intensity
-  );
-
-  // Word timings. When a line has none, synthesise equal-weight positions so
-  // karaoke still animates instead of snapping — degradation, not failure.
-  const rawWords =
-    line.words.length > 0
-      ? line.words
-      : highlightTokens(line.text).map((token, i, all) => {
-          const span = Math.max(1, line.end - line.start);
-          const start = line.start + Math.round((span * i) / all.length);
-          const end = line.start + Math.round((span * (i + 1)) / all.length);
-          return { text: token.text, start, end };
-        });
-
-  const measurer = measure(fontSizePx, weight, letterSpacingPx);
-  const layout = layoutWords(
-    rawWords.map((w, i) => ({ text: w.text, index: i })),
-    measurer,
-    { fontSizePx, lineHeightPx, maxWidthPx: box.contentWidth, letterSpacingPx, uppercase }
   );
 
   const lineProgress = clamp01((musicTimeUs - line.start) / Math.max(1, line.end - line.start));
@@ -370,14 +377,11 @@ function buildLineFrame(
     };
   });
 
-  const blockHeight = layout.heightPx;
-  const blockTop = blockAnchorY(blockHeight, box.contentTop, box.contentHeight, typography.anchor);
+  const blockTop = blockAnchorY(measured.height, box.contentTop, box.contentHeight, typography.anchor) + kickerHeight;
   rows.forEach((row, i) => {
     row.baselineY = blockTop + i * lineHeightPx + fontSizePx * 0.82;
   });
 
-  const translationText = (line.translation ?? line.scene?.subtext)?.trim();
-  const kickerText = line.scene?.kicker?.trim().toUpperCase();
   const activeColor = line.scene?.accent?.trim() || typography.activeColor;
 
   return {
@@ -405,10 +409,10 @@ function buildLineFrame(
     shadowOffsetY: typography.shadowOffsetY * (scene.height / 1080),
     glow: karaoke.glow,
     kicker: kickerText
-      ? { text: kickerText, opacity: opacity * 0.92, fontSizePx: Math.max(12, Math.round(fontSizePx * 0.36)) }
+      ? { text: kickerText, opacity: opacity * 0.92, fontSizePx: Math.max(1, Math.round(fontSizePx * 0.36)) }
       : null,
     translation: translationText
-      ? { text: translationText, opacity: opacity * 0.85, fontSizePx: Math.round(fontSizePx * 0.42) }
+      ? { rows: sub.rows.map(r => ({ ...r, baselineY: blockTop + layout.heightPx + subGap + r.baselineY })), opacity: opacity * 0.85, fontSizePx: subSize }
       : null,
     minConfidence: line.minConfidence
   };
@@ -583,7 +587,7 @@ export function renderFrame(
   paintBackground(ctx, scene, state);
   for (const block of state.blocks) paintBlock(ctx, scene, block);
   for (const line of state.lines) paintLine(ctx, scene, line, state);
-  if (state.card) paintCard(ctx, scene, state.card);
+  if (state.card) paintCard(ctx, scene, state.card, options.measure);
   paintBrand(ctx, scene, state);
   if (options.showGuides) paintGuides(ctx, state);
   ctx.restore();
@@ -752,7 +756,7 @@ function paintLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingConte
         : line.align === 'right'
           ? scene.box.contentLeft + scene.box.contentWidth
           : scene.box.contentLeft;
-    ctx.fillText(line.kicker.text, kx, firstBaseline - line.fontSizePx * 1.12);
+    ctx.fillText(line.kicker.text, kx, firstBaseline - line.fontSizePx * 1.12, scene.box.contentWidth);
     ctx.restore();
   }
 
@@ -814,19 +818,13 @@ function paintLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingConte
   }
 
   if (line.translation) {
-    const lastBaseline = line.rows[line.rows.length - 1]?.baselineY ?? 0;
     ctx.save();
     ctx.globalAlpha = line.translation.opacity;
     ctx.font = `${Math.max(300, line.weight - 200)} ${line.translation.fontSizePx}px ${fontStack}`;
     ctx.fillStyle = withAlpha(line.activeColor, 0.9);
-    ctx.textAlign = line.align;
-    const x =
-      line.align === 'center'
-        ? scene.box.contentLeft + scene.box.contentWidth / 2
-        : line.align === 'right'
-          ? scene.box.contentLeft + scene.box.contentWidth
-          : scene.box.contentLeft;
-    ctx.fillText(line.translation.text, x, lastBaseline + line.translation.fontSizePx * 1.6);
+    ctx.textAlign = 'left';
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    for (const row of line.translation.rows) ctx.fillText(row.text, row.x, row.baselineY);
     ctx.restore();
   }
 
@@ -834,27 +832,36 @@ function paintLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingConte
   void state;
 }
 
-function paintCard(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, scene: Scene, card: CardFrame): void {
+function paintCard(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, scene: Scene, card: CardFrame, measure: MeasureFn): void {
   const { width, height } = scene;
   ctx.save();
   ctx.globalAlpha = card.opacity;
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, width, height);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  const titleSize = Math.round(height * 0.075 * card.scale);
-  ctx.font = `${scene.design.typography.weight} ${titleSize}px ${scene.design.typography.fontStack}`;
-  ctx.fillStyle = '#ffffff';
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = titleSize * 0.4;
-  if (card.title) ctx.fillText(card.title, width / 2, height / 2 - titleSize * 0.4);
-
-  if (card.subtitle) {
-    const subSize = Math.round(titleSize * 0.45);
-    ctx.font = `400 ${subSize}px ${scene.design.typography.fontStack}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText(card.subtitle, width / 2, height / 2 + titleSize * 0.75);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const { box } = scene;
+  const titleSize = Math.round(Math.min(width, height) * 0.075);
+  const subSize = Math.max(1, Math.round(titleSize * 0.45));
+  const parts = [
+    { text: card.title, size: titleSize, weight: scene.design.typography.weight, color: '#ffffff' },
+    { text: card.subtitle, size: subSize, weight: 400, color: 'rgba(255,255,255,0.75)' }
+  ].filter(p => p.text).map(p => ({ ...p, ...wrapTextRows(p.text, measure, {
+    fontSizePx: p.size, weight: p.weight, lineHeightPx: p.size * 1.25,
+    maxWidthPx: box.contentWidth, leftPx: -box.contentWidth / 2, topPx: 0, align: 'center'
+  }) }));
+  const gap = subSize * 0.5;
+  const groupHeight = parts.reduce((h, p, i) => h + p.heightPx + (i ? gap : 0), 0);
+  const widestRow = Math.max(1, ...parts.flatMap(p => p.rows.map(r => r.widthPx)));
+  const scale = Math.min(card.scale, box.contentHeight / Math.max(1, groupHeight), box.contentWidth / widestRow);
+  ctx.translate(box.contentLeft + box.contentWidth / 2, box.contentTop + box.contentHeight / 2);
+  ctx.scale(scale, scale);
+  let y = -groupHeight / 2;
+  for (const p of parts) {
+    ctx.font = `${p.weight} ${p.size}px ${scene.design.typography.fontStack}`;
+    ctx.fillStyle = p.color;
+    for (const row of p.rows) ctx.fillText(row.text, row.x, row.baselineY + y);
+    y += p.heightPx + gap;
   }
   ctx.restore();
 }

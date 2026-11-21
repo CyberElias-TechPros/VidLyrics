@@ -123,7 +123,10 @@ export function estimateSceneDurationUs(
     seconds = Math.max(seconds, 2.2 + (subWords / wpm) * 45);
   }
 
-  return Math.max(minUs, Math.round(seconds * 1_000_000));
+  const narrationUs = scene?.narration?.trim()
+    ? estimateSceneDurationUs(scene.narration, { wordsPerMinute: wpm })
+    : 0;
+  return Math.max(minUs, narrationUs, Math.round(seconds * 1_000_000));
 }
 
 /** Populate monotonic word timings across `[startUs, endUs]` weighted by token length. */

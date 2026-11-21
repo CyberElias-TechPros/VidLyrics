@@ -3,7 +3,7 @@ import { getAspect } from '../design/tokens';
 import type { SpectrumEnvelope } from '../audio/spectrum';
 import type { BeatGrid } from '../audio/beats';
 import { clampUs } from '../time';
-import { highlightTokens } from '../lyrics/segment';
+import { tokenize } from '../lyrics/segment';
 
 /**
  * The scene graph.
@@ -118,8 +118,9 @@ export function contentBox(width: number, height: number, design: Design): Compo
  * re-derive them from the line's own span. The re-derivation happens here, in the
  * one place both preview and export read from, so the two can never disagree.
  */
-function usableWords(line: Line): { text: string; start: Microseconds; end: Microseconds }[] {
-  const tokens = highlightTokens(line.text);
+function usableWords(line: Line, offsetUs: number): { text: string; start: Microseconds; end: Microseconds }[] {
+  const all = tokenize(line.text);
+  const tokens = all.filter(t => !t.isSpace);
   const stored = line.words.filter((w) => w.text.trim().length > 0);
 
   const usable =
@@ -132,19 +133,23 @@ function usableWords(line: Line): { text: string; start: Microseconds; end: Micr
     }) &&
     (stored.length === 0 || (stored[0]!.end - stored[0]!.start > 0));
 
-  if (usable) return stored.map((w) => ({ text: w.text, start: w.start, end: Math.max(w.end, w.start) }));
-
-  // Interpolate across the line by character weight.
-  const weights = tokens.map((t) => Math.max(1, t.text.length));
-  const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
+  // Render from the authored tokens (including spaces and punctuation). Stored
+  // timings describe only highlightable words; separators consume no cue time.
+  const totalWeight = tokens.reduce((sum, t) => sum + t.text.length, 0) || 1;
   const span = Math.max(0, line.end - line.start);
+  let consumed = 0;
+  let index = 0;
   let cursor = line.start;
-  return tokens.map((token, i) => {
-    const share = Math.round((span * (weights[i] ?? 1)) / totalWeight);
-    const start = Math.round(cursor);
-    const end = i === tokens.length - 1 ? line.end : Math.round(cursor + share);
-    cursor = end;
-    return { text: token.text, start, end: Math.max(end, start) };
+  return all.map(token => {
+    let start = cursor;
+    if (!token.isSpace) {
+      consumed += token.text.length;
+      const timed = usable ? stored[index] : undefined;
+      start = timed?.start ?? cursor;
+      cursor = timed?.end ?? line.start + Math.round(span * consumed / totalWeight);
+      index++;
+    }
+    return { text: token.text, start: Math.max(0, start + offsetUs), end: Math.max(0, cursor + offsetUs) };
   });
 }
 
@@ -154,30 +159,29 @@ export function buildScene(project: Project, options: BuildSceneOptions = {}): S
   const audioDuration = project.audio?.durationUs ?? 0;
   const voiceoverDuration = project.voiceover?.enabled ? project.voiceover.durationUs : 0;
   const lastLineEnd = project.lyrics.lines.reduce((max, l) => Math.max(max, l.end), 0);
-  const tail = Math.max(0, audioDuration, voiceoverDuration, lastLineEnd);
+  const offsetUs = options.offsetUs ?? project.export.globalOffsetUs;
+  const tail = Math.max(0, audioDuration, voiceoverDuration, lastLineEnd + offsetUs);
 
   const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;
   const outroUs = project.design.outro.enabled ? project.design.outro.durationUs : 0;
 
   const requestedDuration = options.durationUs ?? null;
   const durationUs = clampUs(
-    requestedDuration ?? Math.max(tail, introUs + outroUs),
+    requestedDuration ?? tail,
     0,
     Number.MAX_SAFE_INTEGER
   );
-
-  const offsetUs = options.offsetUs ?? project.export.globalOffsetUs;
 
   const lines: SceneLine[] = project.lyrics.lines
     .filter((l) => l.text.trim().length > 0)
     .map((l) => ({
       id: l.id,
       text: l.text,
-      words: usableWords(l),
+      words: usableWords(l, offsetUs),
       // The global offset is applied here, at render time, and is NEVER written
       // back into stored timings. Moving the slider must stay reversible.
-      start: Math.max(0, l.start + introUs + offsetUs),
-      end: Math.max(0, l.end + introUs + offsetUs),
+      start: Math.max(0, l.start + offsetUs),
+      end: Math.max(0, l.end + offsetUs),
       speaker: l.speaker,
       translation: l.translation,
       locked: l.locked,

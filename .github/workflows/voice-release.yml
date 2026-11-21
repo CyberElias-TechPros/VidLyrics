@@ -1,0 +1,28 @@
+name: Verify production speech export
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/voice-release.yml'
+      - 'apps/web/scripts/bundle-models.mjs'
+      - 'apps/web/model-voices.json'
+      - 'apps/web/src/media/**'
+      - 'release-tests/**'
+      - 'playwright.release.config.ts'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:release-voice

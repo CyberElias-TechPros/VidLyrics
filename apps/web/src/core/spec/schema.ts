@@ -55,7 +55,7 @@ export const specSceneSchema = z
     id: z.string().min(1).max(128).optional(),
     layout: specLayoutSchema.optional(),
     kicker: z.string().max(160).optional(),
-    text: z.string().min(1, 'Scene text cannot be empty').max(4000),
+    text: z.string().max(4000).refine(text => text.trim().length > 0, 'Scene text cannot be empty'),
     subtext: z.string().max(600).optional(),
     value: z.string().max(80).optional(),
     narration: z.string().max(4000).optional(),
@@ -212,16 +212,37 @@ function formatIssuePath(path: (string | number)[]): string {
   return out;
 }
 
+// Accept a single complete Markdown code fence, never arbitrary chat prose or JS.
+function specSource(text: string): string {
+  const trimmed = text.trim();
+  return (/^```(?:json)?[^\S\n]*\n([\s\S]*?)\n```$/i.exec(trimmed)?.[1] ?? trimmed).trim();
+}
+
+function decodeSpec(source: string): unknown {
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    // Some chat clients escape Markdown punctuation even inside copied JSON.
+    // Consume backslashes in pairs so valid JSON escapes (including a literal
+    // backslash followed by an underscore) survive recovery unchanged.
+    const recovered = source.replace(/\\([\s\S])/g, (pair, char: string) =>
+      ['[', ']', '_'].includes(char) ? char : pair
+    );
+    if (recovered === source) throw error;
+    return JSON.parse(recovered);
+  }
+}
+
 /** Parse and validate raw JSON text as a `VideoSpec`, surfacing exact issues. */
 export function parseVideoSpecJson(rawText: string): SpecParseResult {
-  const trimmed = rawText.trim();
+  const trimmed = specSource(rawText);
   if (!trimmed) {
     return { ok: false, issues: [{ path: '(root)', message: 'Spec is empty — paste JSON or choose a template.' }] };
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = decodeSpec(trimmed);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid JSON syntax.';
     return {
@@ -261,14 +282,17 @@ export function parseVideoSpecJson(rawText: string): SpecParseResult {
 
 /** Detect whether a JSON text or parsed object represents a `vidlyrics.spec` file. */
 export function isVideoSpecJson(text: string): boolean {
+  const source = specSource(text);
+  if (!source.startsWith('{')) return false;
   try {
-    const parsed: unknown = JSON.parse(text);
+    const parsed = decodeSpec(source);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     const obj = parsed as Record<string, unknown>;
     if (obj.kind === 'vidlyrics.spec') return true;
     if (obj.kind === 'vidlyrics.project') return false;
     return Array.isArray(obj.scenes);
   } catch {
-    return false;
+    // Route a damaged spec to validation, not the plain-text scene splitter.
+    return /"kind"\s*:\s*"vidlyrics\.spec"|"scenes"\s*:\s*\\?\[/.test(source);
   }
 }
