@@ -61,6 +61,13 @@ export function Editor() {
   const lyricInputRef = useRef<HTMLInputElement | null>(null);
   const autosaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Success/info are transient; warnings and recovery errors stay dismissible.
+  useEffect(() => {
+    const timers = notices.filter(n => n.kind === 'info' || n.kind === 'success').map(n =>
+      setTimeout(() => useEditor.getState().dismissNotice(n.id), 9000));
+    return () => timers.forEach(clearTimeout);
+  }, [notices]);
+
   /* --------------------------- autosave --------------------------- */
 
   useEffect(() => {

@@ -833,3 +833,11 @@
   .ed-tap { max-height: 72dvh; overflow-y: auto; padding-bottom: max(12px,env(safe-area-inset-bottom)); }
   .ed-toasts { max-height: 32dvh; overflow-y: auto; bottom: calc(106px + env(safe-area-inset-bottom)); }
 }
+
+/* Status banners must not consume clicks intended for inspector controls.
+   Keep the dismiss control interactive, including while authoring on touch. */
+.ed-toasts { pointer-events: none; }
+.ed-toast button { pointer-events: auto; }
+@media (min-width: 1081px) {
+  .ed-toasts { right: calc(var(--panel-w) + var(--sp-4)); }
+}

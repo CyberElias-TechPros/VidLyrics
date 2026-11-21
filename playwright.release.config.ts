@@ -7,6 +7,7 @@ export default defineConfig({
   timeout: 180_000,
   workers: 1,
   use: {
+    actionTimeout: 15000,
     baseURL: 'http://127.0.0.1:4173',
     viewport: { width: 1440, height: 900 },
     launchOptions: { executablePath: process.env.CHROMIUM_PATH }
