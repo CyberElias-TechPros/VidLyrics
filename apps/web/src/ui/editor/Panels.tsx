@@ -52,9 +52,8 @@ export function LyricsPanel() {
   const store = useEditor();
   const [query, setQuery] = useState('');
   const [pasteOpen, setPasteOpen] = useState(lines.length === 0);
-  const [composeMode, setComposeMode] = useState<'lyrics' | 'script'>(() =>
-    store.project.audio ? 'lyrics' : 'script'
-  );
+  const [chosenMode, setComposeMode] = useState<'lyrics' | 'script' | null>(null);
+  const composeMode = chosenMode ?? (store.project.audio ? 'lyrics' : 'script');
   const [splitMode, setSplitMode] = useState<ScriptSplitMode>('sentences');
   const [scriptWpm, setScriptWpm] = useState(155);
   const [draft, setDraft] = useState('');

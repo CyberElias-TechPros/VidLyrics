@@ -28,3 +28,5 @@ Use the same fonts on both machines. This runner uses Chromium's audio decoder, 
 ## Verification
 
 `npm run verify` runs lint, types, unit tests and an app-only build. `npm run test:e2e` includes an original two-tone song fixture, repeated SRT lyrics, word correction, direction, save/reopen and decoding actual exported audio. This fixture verifies synchronization mechanics, not recognition accuracy for real singers. PR CI renders its exported project via native FFmpeg as a separate check. The full-pack speech workflow builds real weights and exercises local narration and transcription. No browser-wide, visual-model or sung-word accuracy benchmark is implied by these checks.
+
+**Save a reusable style:** under Design → My style presets, name and save the current typography, motion, karaoke and accent. The versioned library is device-local. Applying a style copies those values into the project as a single undoable edit; deleting the library entry does not change earlier exports or projects.
