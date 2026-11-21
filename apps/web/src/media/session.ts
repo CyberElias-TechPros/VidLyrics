@@ -419,6 +419,7 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
       ...p,
       voiceover: preserveVoiceover ? p.voiceover : null,
       audio: {
+        ...(p.audio?.contentHash === contentHash && p.audio.energyMap ? { energyMap: p.audio.energyMap } : {}),
         assetId: audioAssetId,
         fileName: sanitizeFileName(file.name),
         mimeType: file.type || 'audio/mpeg',
@@ -429,7 +430,7 @@ export async function importAudioFile(file: File, preloaded?: { buffer: ArrayBuf
         peaksAssetId,
         contentHash
       },
-      export: { ...p.export, rangeStartUs: 0, rangeEndUs: result.durationUs },
+      export: preloaded && preserveVoiceover ? p.export : { ...p.export, rangeStartUs: 0, rangeEndUs: result.durationUs },
       meta: {
         ...p.meta,
         title: p.meta.title || sanitizeFileName(file.name).replace(/\.[^.]+$/, ''),
@@ -637,7 +638,7 @@ function bytesProgress(loaded: number, total: number): string {
 }
 
 /** Generate a reviewable, line-timed transcript without uploading the audio. */
-export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto'): Promise<void> {
+export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto', options: { centre?: boolean; draft?: boolean } = {}): Promise<void> {
   const store = useEditor.getState();
   const token = reserveGenerationStart();
   if (!token) {
@@ -645,13 +646,13 @@ export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto')
     return;
   }
   try {
-    await runTranscription(model, language);
+    await runTranscription(model, language, options);
   } finally {
     releaseGenerationStart(token);
   }
 }
 
-async function runTranscription(model: 'tiny' | 'base', language: string): Promise<void> {
+async function runTranscription(model: 'tiny' | 'base', language: string, options: { centre?: boolean; draft?: boolean }): Promise<void> {
   const store = useEditor.getState();
   const generationEpoch = projectEpoch;
   if (generationWorker) {
@@ -708,6 +709,8 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
     return;
   }
   const samples = audio.pcm.slice();
+  const side = options.centre && audio.channels === 2 ? new Float32Array(samples.length) : undefined;
+  if (side) for (let i = 0; i < side.length; i++) side[i] = (audio.interleaved[i*2]! - audio.interleaved[i*2+1]!) / 2;
   generationWorker = worker;
   activeGenerationId = id;
   activeGenerationKind = 'transcription';
@@ -779,6 +782,13 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
       store.setTranscription({ state: 'FAILED', progress: 0, message: 'No speech was detected.', error: 'Whisper returned no readable lyric lines.', result: null });
       return;
     }
+    if (options.draft && latest.project.lyrics.lines === store.project.lyrics.lines && !latest.project.lyrics.lines.length) {
+      latest.setLyricsFromTranscript(cues, true);
+      latest.setTranscription({ state: 'COMPLETE', progress: 1, message: 'Editable lyric video draft ready.', error: null, result: null });
+      latest.notify({ kind: 'success', title: 'Lyric video draft ready', detail: 'Review uncertain timings or change the treatment under Design.' });
+      void persist();
+      return;
+    }
     store.setTranscription({
       state: 'COMPLETE',
       progress: 1,
@@ -792,7 +802,7 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
     showGenerationError('transcription', id, event.message || 'The transcription worker stopped unexpectedly.');
     finishGenerationWorker(worker, id);
   };
-  worker.postMessage({ type: 'TRANSCRIBE', id, samples, sampleRate: audio.sampleRate, model, modelBundle, language }, [samples.buffer]);
+  worker.postMessage({ type: 'TRANSCRIBE', id, samples, side, sampleRate: audio.sampleRate, model, modelBundle, language }, side ? [samples.buffer,side.buffer] : [samples.buffer]);
 }
 
 export function cancelTranscription(): void {
@@ -1153,14 +1163,22 @@ export function cancelVoiceoverGeneration(): void {
   if (activeGenerationKind === 'voiceover') stopActiveGeneration();
 }
 
-export function downloadGeneratedVoiceover(): void {
+export async function downloadGeneratedVoiceover(): Promise<void> {
   const store = useEditor.getState();
   const meta = store.project.voiceover;
   if (!meta || voiceoverAudio?.assetId !== meta.assetId) {
     store.notify({ kind: 'warning', title: 'Voiceover audio is unavailable', detail: 'Regenerate speech in this browser to download its WAV file.' });
     return;
   }
-  downloadBlob(encodeWav(voiceoverAudio.pcm, voiceoverAudio.sampleRate, 1), meta.fileName);
+  // Export the exact stored asset. Re-quantising decoded PCM after reopen
+  // can produce different bytes and break project hash-based relinking.
+  try {
+    const original = await getAssetPayload(meta.assetId);
+    if (!original) throw new Error('Stored WAV is missing. Regenerate narration and try again.');
+    downloadBlob(original instanceof Blob ? original : new Blob([original], { type: 'audio/wav' }), meta.fileName);
+  } catch (error) {
+    store.notify({ kind: 'error', title: 'Could not download narration', detail: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 export async function removeGeneratedVoiceover(): Promise<void> {

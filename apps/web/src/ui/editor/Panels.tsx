@@ -1,3 +1,7 @@
+import { EnergyMap } from "./EnergyMap";
+import { matchTranscript } from '../../core/timing/transcriptMatch';
+import { StyleLibrary } from './StyleLibrary';
+import { SceneDirector, TimingReview } from './ProductionTools';
 import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../state/store';
 import type { Line, SceneLayout, SceneTransition, VoiceoverMode } from '../../core/types';
@@ -49,14 +53,14 @@ export function LyricsPanel() {
   const store = useEditor();
   const [query, setQuery] = useState('');
   const [pasteOpen, setPasteOpen] = useState(lines.length === 0);
-  const [composeMode, setComposeMode] = useState<'lyrics' | 'script'>(() =>
-    store.project.audio ? 'lyrics' : 'script'
-  );
+  const [chosenMode, setComposeMode] = useState<'lyrics' | 'script' | null>(null);
+  const composeMode = chosenMode ?? (store.project.audio ? 'lyrics' : 'script');
   const [splitMode, setSplitMode] = useState<ScriptSplitMode>('sentences');
   const [scriptWpm, setScriptWpm] = useState(155);
   const [draft, setDraft] = useState('');
   const isSpec = useMemo(() => isVideoSpecJson(draft), [draft]);
   const [whisperModel, setWhisperModel] = useState<'tiny' | 'base'>('tiny');
+  const [centre, setCentre] = useState(false);
   const [transcriptionLanguage, setTranscriptionLanguage] = useState('auto');
   const [voiceChoice, setVoiceChoice] = useState<string | null>(null);
   const [voiceChoiceB, setVoiceChoiceB] = useState<string | null>(null);
@@ -70,6 +74,7 @@ export function LyricsPanel() {
   const transcription = store.transcription;
   const voiceoverJob = store.voiceoverJob;
   const voiceoverMeta = store.project.voiceover;
+  const timingMatches = useMemo(() => transcription.result ? matchTranscript(lines, transcription.result.cues) : null, [lines, transcription.result]);
   const hasAudioTrack = Boolean(store.project.audio);
   const hasSpeakerB = useMemo(() => lines.some((l) => l.speaker === 'B'), [lines]);
   const selectedVoiceId = bundledVoice(voiceChoice ?? voicePrefs?.voiceId ?? voiceoverMeta?.voiceId);
@@ -116,7 +121,7 @@ export function LyricsPanel() {
       }
       if (narrate) void generateVoiceover(selectedVoiceId, { mode: 'sequential', pauseMs, voiceIdB: selectedVoiceIdB });
     } else {
-      store.setLyricsFromText(draft, 'user');
+      if (!store.setLyricsFromText(draft, 'user')) return;
     }
     setDraft('');
     setPasteOpen(false);
@@ -238,6 +243,7 @@ export function LyricsPanel() {
         </div>
       ) : null}
 
+      <TimingReview />
       <div className="ed-panel-section ed-generation-section">
         <span className="ed-panel-label">Generate subtitles from audio</span>
         <p className="ed-hint">Whisper models ship with this app release. First use caches the selected model locally; audio stays in this browser and is never uploaded.</p>
@@ -256,11 +262,14 @@ export function LyricsPanel() {
             </select>
           </label>
         </div>
+        {store.project.audio?.channels === 2 && <label className="ed-check-row"><input type="checkbox" checked={centre} onChange={e => setCentre(e.target.checked)} />Focus on centred vocals for transcription (does not modify the soundtrack)</label>}
+        {hasAudioTrack && !lines.length && <button className="btn btn-sm btn-primary" disabled={store.audioMissing || transcriptionBusy || voiceoverBusy}
+          onClick={() => void transcribeAudio(whisperModel, transcriptionLanguage, { centre, draft:true })}>Create lyric video draft</button>}
         <div className="ed-banner-actions">
           <button
             className="btn btn-sm btn-primary"
             disabled={!store.project.audio || store.audioMissing || transcriptionBusy || voiceoverBusy}
-            onClick={() => void transcribeAudio(whisperModel, transcriptionLanguage)}
+            onClick={() => void transcribeAudio(whisperModel, transcriptionLanguage, { centre })}
           >
             {transcriptionBusy ? 'Transcribing…' : 'Transcribe audio'}
           </button>
@@ -278,7 +287,7 @@ export function LyricsPanel() {
         {transcription.result ? (
           <div className="ed-banner" data-kind="success">
             <h3>Transcript ready · {transcription.result.cues.length} cues</h3>
-            <p>Review the preview before applying. Applying replaces the current lyric lines and is undoable.</p>
+            <p>Replace lyrics with these cues, or keep your words and match estimated lines to recognized phrases. Matched word times are estimates. Confirmed timings are preserved in keep mode.</p>
             <div className="ed-generated-lines">
               {transcription.result.cues.slice(0, 5).map((cue, index) => (
                 <div className="ed-generated-line" key={`${cue.startUs}-${index}`}>
@@ -291,6 +300,10 @@ export function LyricsPanel() {
               <button className="btn btn-sm btn-primary" onClick={() => void applyGeneratedTranscript()}>
                 {lines.length > 0 ? `Replace ${lines.length} lyric lines` : 'Use generated subtitles'}
               </button>
+              {lines.length > 0 && timingMatches && <button className="btn btn-sm btn-ghost" disabled={!timingMatches.size} onClick={() => {
+                store.commit('Match existing lyrics to transcript', p => ({ ...p, lyrics: { ...p.lyrics, lines: p.lyrics.lines.map(l => timingMatches.get(l.id) ?? l) } }));
+                dismissGeneratedTranscript();
+              }}>Keep lyrics · match {timingMatches.size} lines</button>}
               <button className="btn btn-sm btn-ghost" onClick={dismissGeneratedTranscript}>Discard transcript</button>
             </div>
           </div>
@@ -655,6 +668,9 @@ export function DesignPanel() {
 
   return (
     <>
+      <EnergyMap />
+      <SceneDirector />
+      <StyleLibrary />
       <div className="ed-panel-section">
         <span className="ed-panel-label">Theme</span>
         <div className="ed-themes">
@@ -1021,6 +1037,7 @@ export function ExportPanel() {
 
       <div className="ed-panel-section">
         <span className="ed-panel-label">Subtitles, spec &amp; project</span>
+        <details><summary>Need a native H.264 / AAC render?</summary><p className="ed-hint">Export the project below. On a computer with the VidLyrics checkout, Chromium and FFmpeg, run <code>npm run render:native -- project.vidlyricsproject video.mp4</code>. Append paths to the original track, downloaded narration WAV and any images. Files are matched by hash, not uploaded.</p></details>
         <div className="ed-row" style={{ flexWrap: 'wrap', gap: 6 }}>
           {SUBTITLE_FORMATS.map((f) => (
             <button key={f.id} className="btn btn-sm btn-ghost" title={f.description} onClick={() => exportSubtitle(f.id)}>

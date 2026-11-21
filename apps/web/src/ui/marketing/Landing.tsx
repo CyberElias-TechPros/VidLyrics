@@ -168,37 +168,10 @@ function Section({
   );
 }
 
-const PIPELINE = [
-  {
-    step: '01',
-    title: 'Drop in the audio',
-    body:
-      'MP3, WAV, FLAC, M4A, OGG. The file is decoded in a worker, so the interface stays responsive while a peak map and a spectral envelope are built for the waveform, the visualizer and beat detection.'
-  },
-  {
-    step: '02',
-    title: 'Bring your own lyrics',
-    body:
-      'Paste text, or import LRC, enhanced LRC, SRT, VTT, ASS, JSON or a previous project. Timings you already have are kept; structural tags like [Chorus] are read as sections.'
-  },
-  {
-    step: '03',
-    title: 'Put the words in time',
-    body:
-      'Tap one key per line while the track plays and timestamps come from the audio clock, not the wall clock. Or let timing be estimated from lyric weight, then correct it by dragging on the waveform.'
-  },
-  {
-    step: '04',
-    title: 'Make it look like a record',
-    body:
-      'Eight art-directed themes, karaoke fill modes, album-safe typography, safe-area guides per platform, intro and outro cards, and a beat-reactive visualizer driven by the track itself.'
-  },
-  {
-    step: '05',
-    title: 'Export the video',
-    body:
-      'WebCodecs encodes offline at a constant frame rate — never a realtime capture — so the file matches the preview frame for frame. Subtitles and the project file export alongside it.'
-  }
+const WORKFLOWS = [
+  { step: 'SCRIPT', title: 'Narrate a story', body: 'Paste prose or a scene spec. Generate speech locally, time the scenes to the narration, then edit the visuals and export. No audio file or microphone is needed.' },
+  { step: 'SONG', title: 'Time lyrics to music', body: 'Choose an audio file and import or transcribe the words. Adjust their timing against the waveform, choose a karaoke style and export the video or subtitles.' },
+  { step: 'CODE', title: 'Compose with scenes', body: 'Open a template or write a video spec. Preview the layout, motion and transitions as you edit. Export with narration or without an audio track.' }
 ];
 
 const FAQS = [
@@ -280,9 +253,9 @@ export function Landing() {
           <div>
             <span className="hero-eyebrow">Runs entirely on your device</span>
             <h1 className="hero-title">
-              <span className="ln"><span>Lyrics that</span></span>
-              <span className="ln"><span>land on <em>time</em>,</span></span>
-              <span className="ln"><span>in <span className="accent">minutes</span>.</span></span>
+              <span className="ln"><span>Your words.</span></span>
+              <span className="ln"><span>Your <em>sound.</em></span></span>
+              <span className="ln"><span>Your <span className="accent">video.</span></span></span>
             </h1>
             <p className="hero-sub">
               Sync lyrics to a track, turn a plain script into a narrated video with local TTS, or
@@ -291,10 +264,7 @@ export function Landing() {
             </p>
             <div className="hero-cta">
               <Link to="/app" className="btn btn-primary btn-lg">
-                Start a lyric video
-              </Link>
-              <Link to="/app?template=video-as-code" className="btn btn-ghost btn-lg">
-                Video as code
+                Open the studio
               </Link>
               <a href="#how" className="btn btn-ghost btn-lg">
                 How it works
@@ -314,12 +284,12 @@ export function Landing() {
 
         <Section
           id="how"
-          eyebrow="The pipeline"
-          title="Five steps, and one of them is optional."
-          lede="Automated timing is a convenience, not a dependency. If it is unavailable, unconvincing or simply not to your taste, manual tap-sync gets you the same result."
+          eyebrow="Inside the studio"
+          title="Three ways to make a video."
+          lede="Choose the material you already have. Each workflow leads to an editable timeline, a saved project and a video you can download."
         >
           <dl className="pipeline">
-            {PIPELINE.map((item) => (
+            {WORKFLOWS.map((item) => (
               <div className="pipeline-step" key={item.step}>
                 <dt>{item.step}</dt>
                 <dd>
@@ -452,10 +422,9 @@ export function Landing() {
         </Section>
 
         <section className="final">
-          <h2>Your track is already on your computer.</h2>
+          <h2>Start with a script, a song or a scene.</h2>
           <p className="section-lede" style={{ margin: '0 auto var(--sp-6)', maxWidth: '52ch' }}>
-            Nothing to upload, nothing to wait for. Open the studio and the first frame is rendered
-            before you finish reading this sentence.
+            Write and narrate scenes, sync lyrics to music, or edit a template. Save your project and render locally.
           </p>
           <Link to="/app" className="btn btn-primary btn-lg">
             Open the studio

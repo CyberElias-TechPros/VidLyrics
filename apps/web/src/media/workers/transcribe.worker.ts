@@ -2,8 +2,7 @@
 import { configureWasm, initWhisper } from '@fugood/node-whisper-wasm';
 import whisperSingleJsUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.js?url';
 import whisperSingleWasmUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.wasm?url';
-import whisperThreadsJsUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.threads.js?url';
-import whisperThreadsWasmUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.threads.wasm?url';
+import { focusCentre } from '../../core/audio/vocalFocus';
 import { resampleMono } from '../../core/audio/resample';
 import { bundledFileResponse } from '../bundledFileStream';
 import type { SelectedWhisperModel } from '../modelBundle';
@@ -11,7 +10,7 @@ import type { SelectedWhisperModel } from '../modelBundle';
 const MODEL_CACHE_NAME = 'vidlyrics-whisper-models-v1';
 type ModelSize = 'tiny' | 'base';
 type IncomingMessage =
-  | { type: 'TRANSCRIBE'; id: string; samples: Float32Array; sampleRate: number; model: ModelSize; modelBundle: SelectedWhisperModel; language: string | null }
+  | { type: 'TRANSCRIBE'; id: string; samples: Float32Array; side?: Float32Array; sampleRate: number; model: ModelSize; modelBundle: SelectedWhisperModel; language: string | null }
   | { type: 'CANCEL'; id: string };
 
 type OutgoingMessage =
@@ -23,12 +22,13 @@ type OutgoingMessage =
   | { type: 'ERROR'; id: string; message: string }
   | { type: 'CANCELLED'; id: string };
 
-const useThreads = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true;
 configureWasm({
   worker: false,
-  threads: useThreads,
-  jsPath: useThreads ? whisperThreadsJsUrl : whisperSingleJsUrl,
-  wasmPath: useThreads ? whisperThreadsWasmUrl : whisperSingleWasmUrl
+  // This is already a dedicated module worker. The threaded Emscripten
+  // build can hang during nested pthread bootstrap without rejecting init.
+  threads: false,
+  jsPath: whisperSingleJsUrl,
+  wasmPath: whisperSingleWasmUrl
 });
 
 let activeId: string | null = null;
@@ -119,9 +119,10 @@ async function runTranscription(message: Extract<IncomingMessage, { type: 'TRANS
     });
 
     send({ type: 'STATUS', id: message.id, state: 'TRANSCRIBING', message: 'Listening for lyric lines…' });
-    const audio = resampleMono(message.samples, message.sampleRate, 16_000);
+    const mid = resampleMono(message.samples, message.sampleRate, 16_000);
+    const audio = message.side ? focusCentre(mid, resampleMono(message.side, message.sampleRate, 16_000)) : mid;
     const options = {
-      maxThreads: Math.max(1, Math.min(4, Number(navigator.hardwareConcurrency) || 2)),
+      maxThreads: 1,
       tokenTimestamps: false,
       ...(message.language && message.language !== 'auto' ? { language: message.language } : {}),
       onProgress: (progress: number) => {

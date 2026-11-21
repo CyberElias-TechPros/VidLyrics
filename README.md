@@ -1,5 +1,9 @@
 # BUILD PROMPT — Lyrics Video Studio
 
+[Production workflows and native rendering](docs/production-workflows.md)
+
+[Studio integration blueprint](docs/integration-blueprint.md) · [100-repository decision register](docs/integration-register.md)
+
 ## From a chat script to a video (web studio)
 
 1. Open **Script to video**. Paste prose and choose **Build & narrate**, or paste a complete `vidlyrics.spec` JSON object and choose **Apply & narrate**. The studio generates the voice in your browser and times each scene to its speech. No microphone or speech API key is needed.

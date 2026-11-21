@@ -55,10 +55,18 @@ export function Editor() {
   const [showProjects, setShowProjects] = useState(false);
   const [projects, setProjects] = useState<Awaited<ReturnType<typeof listProjects>>>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const projectInputRef = useRef<HTMLInputElement | null>(null);
   const lyricInputRef = useRef<HTMLInputElement | null>(null);
   const autosaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Success/info are transient; warnings and recovery errors stay dismissible.
+  useEffect(() => {
+    const timers = notices.filter(n => n.kind === 'info' || n.kind === 'success').map(n =>
+      setTimeout(() => useEditor.getState().dismissNotice(n.id), 9000));
+    return () => timers.forEach(clearTimeout);
+  }, [notices]);
 
   /* --------------------------- autosave --------------------------- */
 
@@ -193,15 +201,7 @@ export function Editor() {
       return;
     }
     const parsed = parseLyrics(text, file.name);
-    if (parsed.lines.length > 0 && parsed.lines.some((l) => l.start !== null)) {
-      // Reconstruct an LRC-style text so existing timings survive the round trip.
-      const reconstructed = parsed.lines
-        .map((l) => `[${Math.floor((l.start ?? 0) / 60_000_000)}:${String(Math.floor(((l.start ?? 0) / 1_000_000) % 60)).padStart(2, '0')}.${String(Math.floor(((l.start ?? 0) / 10_000) % 100)).padStart(2, '0')}]${l.text}`)
-        .join('\n');
-      store.setLyricsFromText(reconstructed, 'file', file.name);
-    } else {
-      store.setLyricsFromText(text, 'file', file.name);
-    }
+    if (!store.setLyricsFromText(text, 'file', file.name)) return;
     for (const warning of parsed.warnings) {
       store.notify({ kind: 'warning', title: 'Import note', detail: warning });
     }
@@ -255,6 +255,7 @@ export function Editor() {
   return (
     <div
       className="ed"
+      data-actions-open={actionsOpen}
       data-panel-open={panelOpen ? 'true' : 'false'}
       onDragOver={(e) => {
         e.preventDefault();
@@ -268,7 +269,12 @@ export function Editor() {
       <input ref={lyricInputRef} type="file" accept=".lrc,.srt,.vtt,.ass,.ssa,.txt,.json" className="sr-only" onChange={(e) => void onLyricFiles(e.target.files)} />
 
       {/* ---------------- top bar ---------------- */}
-      <header className="ed-top">
+      <header className="ed-top" onKeyDown={event => {
+        if (event.key === 'Escape' && actionsOpen) {
+          setActionsOpen(false);
+          event.currentTarget.querySelector<HTMLButtonElement>('[aria-controls="studio-actions"]')?.focus();
+        }
+      }}>
         <Link to="/" className="mkt-brand" style={{ fontSize: 'var(--step-0)', flex: 'none' }} aria-label="Back to home">
           <svg width="20" height="20" viewBox="0 0 26 26" aria-hidden="true">
             <rect x="1" y="9" width="3" height="8" rx="1.5" fill="currentColor" opacity="0.55" />
@@ -297,7 +303,16 @@ export function Editor() {
         <span className="ed-save" data-dirty={dirty ? 'true' : 'false'} role="status">
           {dirty ? 'Saving…' : 'Saved locally'}
         </span>
-        <div className="ed-top-actions">
+        <button className="ed-mobile-action btn btn-sm btn-ghost" aria-expanded={actionsOpen} aria-controls="studio-actions" onClick={() => setActionsOpen(!actionsOpen)}>Actions</button>
+        <div className="ed-top-actions" id="studio-actions" onClick={event => {
+          if (event.target instanceof Element && event.target.closest('button')) setActionsOpen(false);
+        }}>
+          <label className="ed-mobile-action ed-field">Artist
+            <input className="ed-input" value={project.meta.artist} onChange={e => store.setMeta({ artist: e.target.value })} />
+          </label>
+          <button className="ed-mobile-action btn btn-sm btn-ghost" aria-pressed={store.showGuides} onClick={() => store.setShowGuides(!store.showGuides)}>Safe areas</button>
+          <button className="ed-mobile-action btn btn-sm btn-ghost" aria-pressed={store.showHeat} onClick={() => store.setShowHeat(!store.showHeat)}>Timing confidence</button>
+          <button className="ed-mobile-action btn btn-sm btn-ghost" onClick={() => tapActive ? store.stopTapSync() : store.startTapSync()}>Tap-sync</button>
           <button className="btn btn-sm btn-ghost" onClick={() => store.undo()} disabled={!store.canUndo()} title={store.undoLabel() ?? 'Nothing to undo'}>
             Undo
           </button>
@@ -364,17 +379,17 @@ export function Editor() {
           </div>
         ) : media.error || !hasTimelineContent ? (
           <div className="ed-empty" style={{ gridRow: '1 / 3', placeSelf: 'center' }}>
-            <h2>Start with audio, a script, or code</h2>
+            <h2>Choose your starting point</h2>
             <p>
               Drop an audio track, paste a script for local voiceover, or author scenes in declarative JSON.
               Every step — decode, TTS, render, MP4 encode — runs privately on this device.
             </p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-              <button className="btn btn-primary" onClick={() => audioInputRef.current?.click()}>Choose audio</button>
-              <button className="btn btn-ghost" onClick={startWithCodeTemplate}>Video as code</button>
+            <div className="ed-start-paths">
               <button className="btn btn-ghost" onClick={() => { store.setPanel('lyrics'); setPanelOpen(true); }}>Script to video</button>
-              <button className="btn btn-ghost" onClick={() => projectInputRef.current?.click()}>Open project</button>
+              <button className="btn btn-ghost" onClick={() => audioInputRef.current?.click()}>Song to lyric video</button>
+              <button className="btn btn-ghost" onClick={startWithCodeTemplate}>Video as code</button>
             </div>
+            <button className="btn btn-sm btn-ghost" onClick={() => projectInputRef.current?.click()}>Open project</button>
             {media.error ? (
               <div className="ed-banner" data-kind="error" style={{ textAlign: 'left', maxWidth: 460 }}>
                 <h3>{media.error.title}</h3>
@@ -459,6 +474,11 @@ export function Editor() {
         ) : null}
       </footer>
 
+      <nav className="ed-workspace-switch" aria-label="Mobile workspace">
+        <button aria-pressed={!panelOpen} onClick={() => { setPanelOpen(false); setActionsOpen(false); }}>Preview &amp; timeline</button>
+        <button aria-pressed={panelOpen} onClick={() => { setPanelOpen(true); setActionsOpen(false); }}>Edit project</button>
+      </nav>
+
       {/* ---------------- tap-sync ---------------- */}
       {tapActive ? (
         <div className="ed-tap" role="region" aria-label="Tap-sync">
@@ -472,6 +492,7 @@ export function Editor() {
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button className="btn btn-sm btn-ghost" onClick={() => void togglePlayback()}>{playing ? 'Pause' : 'Play'}</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => store.tapAt(useEditor.getState().playheadUs)}>Mark line</button>
               <button className="btn btn-sm btn-ghost" onClick={() => store.tapUndo()} disabled={tap.taps.length === 0}>Undo tap (Z)</button>
               <button className="btn btn-sm btn-ghost" onClick={() => store.tapReset()}>Reset</button>
               <button className="btn btn-sm btn-primary" onClick={() => store.applyTapTimings()} disabled={tap.taps.length === 0}>Apply timings</button>

@@ -135,57 +135,36 @@ export function refreshWordTimings(lines: Line[]): Line[] {
  * Existing human timings win; imported data fills everything else.
  */
 export function mergeParsedTimings(lines: Line[], parsed: ParsedLine[]): Line[] {
-  const bySignature = new Map<string, ParsedLine>();
-  for (const p of parsed) {
-    if (p.start === null) continue;
-    const sig = normalizeForMatch(p.text);
-    if (!sig) continue;
-    if (!bySignature.has(sig)) bySignature.set(sig, p);
+  const occurrences = new Map<string, ParsedLine[]>();
+  for (const cue of parsed) {
+    const key = normalizeForMatch(cue.text);
+    if (key && cue.start !== null) {
+      const group = occurrences.get(key) ?? [];
+      group.push(cue); occurrences.set(key, group);
+    }
   }
-
-  let cursor = 0;
-  return lines.map((line, index) => {
-    if (line.source === 'human' || line.source === 'tap' || line.locked) {
-      cursor = line.end;
-      return line;
-    }
-    const sig = normalizeForMatch(line.text);
-    const match = bySignature.get(sig);
-    if (match && match.start !== null) {
-      const start = match.start;
-      const end = match.end ?? start + usFromMs(2000);
-      cursor = end;
-      return {
-        ...line,
-        start,
-        end,
-        source: 'align' as const,
-        confidence: 0.8,
-        words: mergeWordTimings(line, match, start, end)
-      };
-    }
-    // No textual match: slot it after the previous line rather than at zero,
-    // which would stack every unmatched line on top of the first second.
-    const fallbackStart = Math.max(cursor, index === 0 ? 0 : cursor);
-    cursor = fallbackStart;
-    return line;
+  const used = new Map<string, number>();
+  return lines.map(line => {
+    const key = normalizeForMatch(line.text), index = used.get(key) ?? 0;
+    const match = occurrences.get(key)?.[index];
+    used.set(key, index + 1);
+    if (line.locked || ['human','tap','tts'].includes(line.source) || line.words.some(w => w.source === 'human' || w.locked) || !match || match.start === null) return line;
+    const start = match.start, end = match.end ?? start + usFromMs(2000);
+    return { ...line, start, end, source: 'align', confidence: 0.8, words: mergeWordTimings(line, match, start, end) };
   });
 }
 
 function mergeWordTimings(line: Line, parsed: ParsedLine, start: Microseconds, end: Microseconds): Line['words'] {
   if (parsed.words.length === 0) return interpolateWords(line, start, end);
   const tokens = highlightTokens(line.text);
-  const byText = new Map<string, number>();
-  parsed.words.forEach((w, i) => {
-    const key = normalizeForMatch(w.text);
-    if (key && !byText.has(key)) byText.set(key, i);
-  });
-
   const assigned = new Map<number, Microseconds[]>();
+  let next = 0;
   tokens.forEach((token, tokenIndex) => {
-    const idx = byText.get(normalizeForMatch(token.text));
-    const w = idx !== undefined ? parsed.words[idx] : undefined;
-    if (w) assigned.set(tokenIndex, [w.start, Math.max(w.end, w.start)]);
+    const word = parsed.words[next];
+    if (word && normalizeForMatch(word.text) === normalizeForMatch(token.text)) {
+      assigned.set(tokenIndex, [word.start, Math.max(word.end, word.start)]);
+      next++;
+    }
   });
 
   if (assigned.size === 0) return interpolateWords(line, start, end);

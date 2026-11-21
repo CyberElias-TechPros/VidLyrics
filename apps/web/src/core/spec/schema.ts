@@ -20,7 +20,7 @@ export const specEnterSchema = z.enum(['fade', 'rise', 'clip', 'blur', 'wordCasc
 export const specExitSchema = z.enum(['fade', 'sink', 'blur', 'none']);
 export const specTransitionSchema = z.enum(['fade', 'wipe', 'slide', 'zoom', 'none']);
 export const specAspectSchema = z.enum(['16:9', '9:16', '1:1', '4:5', '4:3', 'custom']);
-export const specBackgroundKindSchema = z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer']);
+export const specBackgroundKindSchema = z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer', 'horizon']);
 
 export const specBackgroundSchema = z
   .object({

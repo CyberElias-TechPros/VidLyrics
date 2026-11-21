@@ -1,3 +1,6 @@
+import { applyShots, planShots } from '../core/director/plan';
+import { parseLyrics } from '../core/lyrics/parse';
+import { importLines } from '../core/lyrics/importLines';
 import { create } from 'zustand';
 import type {
   AppError, Design, ExportSettings, Line, Microseconds, Project, RenderState, SceneVisual, SyncState, VoiceoverMeta
@@ -12,6 +15,7 @@ import {
   canRedo, canUndo, undoLabel, redoLabel, type Command, type HistoryState
 } from '../core/project/history';
 import { usFromMs, usFromSeconds } from '../core/time';
+import { isTimingAnchor, estimateAroundAnchors } from '../core/timing/anchors';
 import { interpolateWords, estimateLineTimings } from '../core/timing/distribute';
 import { postProcess, sortLines, rebuildWordsForLine } from '../core/timing/postprocess';
 import { tapReducer, createTapSession, applyTaps, type TapSession } from '../core/timing/tap';
@@ -118,10 +122,10 @@ export interface EditorState {
   setMeta: (patch: Partial<Project['meta']>) => void;
 
   /* lyrics & programmatic scenes */
-  setLyricsFromText: (text: string, source: Project['lyrics']['source'], fileName?: string | null) => void;
+  setLyricsFromText: (text: string, source: Project['lyrics']['source'], fileName?: string | null) => boolean;
   setScenesFromScript: (scriptText: string, options?: ScriptSplitOptions) => boolean;
   applyVideoSpec: (spec: VideoSpec, options?: { label?: string; coalesceKey?: string; resetPlayhead?: boolean }) => void;
-  setLyricsFromTranscript: (cues: TranscriptCue[]) => void;
+  setLyricsFromTranscript: (cues: TranscriptCue[], direct?: boolean) => void;
   updateLineText: (lineId: string, text: string) => void;
   setLineScene: (lineId: string, patch: Partial<SceneVisual> | null) => void;
   deleteLines: (lineIds: string[]) => void;
@@ -292,16 +296,14 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setLyricsFromText: (text, source, fileName = null) => {
     const { project, history } = get();
-    const clean = normalizeDisplay(text);
-    const lines = clean
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => createLine(l));
-    const structure = inferSections(lines);
-    for (const line of lines) line.sectionId = structure.assignment.get(line.id) ?? null;
-    const estimated = estimateLineTimings(lines, { durationUs: project.audio?.durationUs ?? null });
-    const processed = postProcess(estimated, { durationUs: project.audio?.durationUs ?? null, applyLeadIn: true });
+    const parsed = parseLyrics(text, fileName ?? 'lyrics.txt');
+    if (!parsed.lines.length) {
+      get().notify({ kind: 'error', title: 'No readable cues', detail: parsed.warnings[0] ?? 'Check the subtitle format and try again.' });
+      return false;
+    }
+    const processed = importLines(parsed, project.audio?.durationUs ?? null);
+    const structure = inferSections(processed);
+    for (const line of processed) line.sectionId = structure.assignment.get(line.id) ?? null;
     const before = project.lyrics;
     const beforeSections = project.sections;
     const beforeExport = project.export;
@@ -320,6 +322,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     };
     const result = applyCommand(project, history, command);
     set({ project: result.state, history: result.history, dirty: true });
+    return true;
   },
 
   setScenesFromScript: (scriptText, options) => {
@@ -384,7 +387,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
   },
 
-  setLyricsFromTranscript: (cues) => {
+  setLyricsFromTranscript: (cues, direct = false) => {
     const { project, history } = get();
     const cleanCues = cues
       .map((cue) => ({
@@ -412,13 +415,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
     const before = project.lyrics;
     const beforeSections = project.sections;
+    const draft: Project = { ...project, sections: structure.sections, lyrics: { source: 'asr', originalText, originalFileName: null, lines: processed } };
+    const lyrics = direct ? applyShots(draft, planShots(draft, get().spectrum, 'afterglow', false)).lyrics : draft.lyrics;
     const command: Command<Project> = {
-      label: 'Apply generated subtitles',
-      apply: (p) => ({
-        ...p,
-        lyrics: { source: 'asr', originalText, originalFileName: null, lines: processed },
-        sections: structure.sections
-      }),
+      label: direct ? 'Create lyric video draft' : 'Apply generated subtitles',
+      apply: p => ({ ...p, lyrics, sections: structure.sections }),
       revert: (p) => ({ ...p, lyrics: before, sections: beforeSections })
     };
     const result = applyCommand(project, history, command);
@@ -730,6 +731,20 @@ export const useEditor = create<EditorState>((set, get) => ({
     const before = project.lyrics.lines;
     const beforeExport = project.export;
     const durationUs = project.audio?.durationUs ?? null;
+    if (before.some(isTimingAnchor)) {
+      const end = durationUs ?? Math.max(timeScenesSequentially(before).totalDurationUs, ...before.map(l => l.end));
+      const lines = estimateAroundAnchors(before, end);
+      if (!lines.some((l,i) => l !== before[i])) return;
+      const intro = project.design.intro.enabled ? project.design.intro.durationUs : 0;
+      const outro = project.design.outro.enabled ? project.design.outro.durationUs : 0;
+      const result = applyCommand(project, history, {
+        label: 'Estimate around confirmed timings',
+        apply: p => ({ ...p, lyrics: { ...p.lyrics, lines }, export: durationUs === null ? { ...p.export, rangeEndUs: Math.max(p.export.rangeEndUs, end + intro + outro) } : p.export }),
+        revert: p => ({ ...p, lyrics: { ...p.lyrics, lines: before }, export: beforeExport })
+      });
+      set({ project: result.state, history: result.history, dirty: true });
+      return;
+    }
     if (durationUs === null) {
       const { lines: timed, totalDurationUs } = timeScenesSequentially(before);
       const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;

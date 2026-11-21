@@ -142,7 +142,7 @@ export interface Aspect {
   safeArea: { top: number; right: number; bottom: number; left: number };
 }
 
-export type BackgroundKind = 'gradient' | 'image' | 'solid' | 'mesh' | 'visualizer';
+export type BackgroundKind = 'gradient' | 'image' | 'solid' | 'mesh' | 'visualizer' | 'horizon';
 
 export interface BackgroundSpec {
   kind: BackgroundKind;
@@ -247,7 +247,11 @@ export interface Design {
  * AUDIO + ASSETS
  * ------------------------------------------------------------------ */
 
+export interface EnergyMarker { start: Microseconds; level: 'quiet' | 'steady' | 'lift' }
+
 export interface AudioMeta {
+  /** Accepted section markers in the original track clock, not generated on reload. */
+  energyMap?: EnergyMarker[];
   /** Key into the local asset store. Content-hash addressed. */
   assetId: Id;
   fileName: string;

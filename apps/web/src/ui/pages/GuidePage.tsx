@@ -46,10 +46,10 @@ const SECTIONS = [
     body: (
       <>
         <p>
-          Lyrics always come from you. The app never fetches them, because lyrics are licensed
-          separately from recordings and third-party databases are licensed data.
+          Use your own lyric text, timed captions or the local speech model. The studio does not fetch lyrics from third-party databases. Use recordings and lyrics you have permission to publish.
         </p>
         <ul>
+          <li><strong>Create lyric video draft</strong> — with an empty timeline and a song loaded, generate timed lines and an editable visual treatment locally. Use Review uncertain timings to correct estimated word boundaries.</li>
           <li><strong>Paste text</strong> — one line per lyric. Structural tags such as <code>[Chorus]</code> or <code>(Verse 2)</code> are read as sections.</li>
           <li><strong>Import a file</strong> — LRC, enhanced LRC, SRT, VTT, ASS, JSON or a previous project file. Existing timings are kept.</li>
         </ul>
