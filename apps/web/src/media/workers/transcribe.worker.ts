@@ -4,6 +4,7 @@ import whisperSingleJsUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.js?u
 import whisperSingleWasmUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.wasm?url';
 import whisperThreadsJsUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.threads.js?url';
 import whisperThreadsWasmUrl from '@fugood/node-whisper-wasm/wasm/whisper-node.threads.wasm?url';
+import { focusCentre } from '../../core/audio/vocalFocus';
 import { resampleMono } from '../../core/audio/resample';
 import { bundledFileResponse } from '../bundledFileStream';
 import type { SelectedWhisperModel } from '../modelBundle';
@@ -11,7 +12,7 @@ import type { SelectedWhisperModel } from '../modelBundle';
 const MODEL_CACHE_NAME = 'vidlyrics-whisper-models-v1';
 type ModelSize = 'tiny' | 'base';
 type IncomingMessage =
-  | { type: 'TRANSCRIBE'; id: string; samples: Float32Array; sampleRate: number; model: ModelSize; modelBundle: SelectedWhisperModel; language: string | null }
+  | { type: 'TRANSCRIBE'; id: string; samples: Float32Array; side?: Float32Array; sampleRate: number; model: ModelSize; modelBundle: SelectedWhisperModel; language: string | null }
   | { type: 'CANCEL'; id: string };
 
 type OutgoingMessage =
@@ -119,7 +120,8 @@ async function runTranscription(message: Extract<IncomingMessage, { type: 'TRANS
     });
 
     send({ type: 'STATUS', id: message.id, state: 'TRANSCRIBING', message: 'Listening for lyric lines…' });
-    const audio = resampleMono(message.samples, message.sampleRate, 16_000);
+    const mid = resampleMono(message.samples, message.sampleRate, 16_000);
+    const audio = message.side ? focusCentre(mid, resampleMono(message.side, message.sampleRate, 16_000)) : mid;
     const options = {
       maxThreads: Math.max(1, Math.min(4, Number(navigator.hardwareConcurrency) || 2)),
       tokenTimestamps: false,

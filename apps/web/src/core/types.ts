@@ -142,7 +142,7 @@ export interface Aspect {
   safeArea: { top: number; right: number; bottom: number; left: number };
 }
 
-export type BackgroundKind = 'gradient' | 'image' | 'solid' | 'mesh' | 'visualizer';
+export type BackgroundKind = 'gradient' | 'image' | 'solid' | 'mesh' | 'visualizer' | 'horizon';
 
 export interface BackgroundSpec {
   kind: BackgroundKind;

@@ -19,3 +19,9 @@ jobs:
       - run: npm run verify
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - name: Check native render fallback against the exported song project
+        run: |
+          if ! command -v ffmpeg >/dev/null; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+          npm run render:native -- test-results/*/proof.vidlyricsproject "$RUNNER_TEMP/native.mp4" test-results/*/melody.wav
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames -of csv=p=0 "$RUNNER_TEMP/native.mp4")" = 36
+          test "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$RUNNER_TEMP/native.mp4")" = aac

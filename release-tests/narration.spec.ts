@@ -74,3 +74,21 @@ test('build and narrate generates speech directly from a plain script', async ({
   await expect(ready).toBeVisible();
   await expect(page.getByText(/Generated with en_US-norman-medium/)).toBeVisible();
 });
+
+test('real local speech can be transcribed into editable subtitle cues', async ({page, context}) => {
+  await page.goto('/app');
+  await page.getByRole('button',{name:'Script to video',exact:true}).click();
+  await page.locator('#lyric-paste').fill('Welcome to the studio. Today we are making a video about music.');
+  await page.getByRole('button',{name:'Build & narrate',exact:true}).click();
+  const download=page.getByRole('button',{name:'Download WAV'});
+  await expect(download).toBeEnabled({timeout:120000});
+  const [wav]=await Promise.all([page.waitForEvent('download'),download.click()]);
+  const song=await context.newPage();await song.goto('/app');
+  await song.locator('input[type=file][accept^="audio/"]').setInputFiles({name:'spoken-word.wav',mimeType:'audio/wav',buffer:await (await import('node:fs/promises')).readFile((await wav.path())!)});
+  await expect(song.getByText('Audio ready',{exact:true})).toBeVisible();
+  await song.getByRole('button',{name:'Transcribe audio',exact:true}).click();
+  const accept=song.getByRole('button',{name:'Use generated subtitles'});
+  await expect(accept.or(song.locator('.ed-generation-error')).first()).toBeVisible({timeout:120000});
+  await expect(song.locator('.ed-generated-lines').filter({hasText:/studio|music|video/i})).toBeVisible();
+  await accept.click();await expect(song.getByRole('button',{name:'Review uncertain timings'})).toBeEnabled();
+});

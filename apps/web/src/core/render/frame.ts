@@ -99,6 +99,8 @@ export interface BackgroundFrame {
   stops: { offset: number; color: string }[];
   /** Angle of a linear gradient, radians. */
   angle: number;
+  /** Perspective grid phase in world coordinates; independent of wall-clock time. */
+  horizonPhase?: number;
   /** Radial mesh blob centres/colours. */
   blobs: { x: number; y: number; radius: number; color: string }[];
   scrim: number;
@@ -528,6 +530,7 @@ function computeBackground(scene: Scene, musicTimeUs: Microseconds, bgSpec?: Bac
   return {
     kind: bg.kind,
     stops,
+    horizonPhase: drift - Math.floor(drift),
     angle: Math.PI * 0.5 + 0.25 * Math.sin(drift * 0.12),
     blobs,
     scrim: bg.scrim,
@@ -648,6 +651,25 @@ function paintBackgroundLayer(
     ctx.fillRect(0, 0, width, height);
   }
 
+  if (bg.kind === 'horizon') {
+    // Project a ground grid from a single vanishing point. Sample the same
+    // world coordinates on seek, preview and export, without a GPU runtime.
+    const horizon = height * 0.42;
+    ctx.save();
+    ctx.strokeStyle = withAlpha(bg.stops.at(-1)?.color ?? '#57dfee', 0.8);
+    ctx.lineWidth = Math.max(1, width / 900);
+    ctx.beginPath();
+    for (let ray = -12; ray <= 12; ray++) {
+      ctx.moveTo(width / 2, horizon);
+      ctx.lineTo(width / 2 + ray * width / 6, height);
+    }
+    for (let row = 1; row <= 24; row++) {
+      const y = horizon + (height - horizon) / (row - (bg.horizonPhase ?? 0));
+      if (y <= height) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
   if (bg.scrim > 0) {
     const scrim = ctx.createLinearGradient(0, 0, 0, height);
     scrim.addColorStop(0, `rgba(0,0,0,${bg.scrim * 0.5})`);

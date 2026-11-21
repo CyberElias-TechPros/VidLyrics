@@ -91,7 +91,7 @@ function parseEnhancedLrcWords(rest: string, lineEnd: Microseconds | null): Pars
   while ((m = LRC_WORD_TIME.exec(rest))) {
     marks.push({ start: lrcTagToUs(m[1] ?? '0', m[2] ?? '0', m[3]), index: m.index + m[0].length });
   }
-  if (marks.length < 2) return [];
+  if (!marks.length) return [];
 
   const words: ParsedWord[] = [];
   for (let i = 0; i < marks.length; i += 1) {
@@ -156,7 +156,7 @@ function parseLrc(contents: string, warnings: string[]): ParsedLyrics {
     // A single physical line carrying several timestamps means the same lyric
     // repeats — a chorus. Emit one cue per stamp.
     for (const start of stamps) {
-      lines.push({ text, start, end: null, words: parseEnhancedLrcWords(rest, null) });
+      lines.push({ text, start, end: null, words: parseEnhancedLrcWords(rest, null).map(w => ({ ...w, start: w.start + start - stamps[0]!, end: w.end + start - stamps[0]! })) });
     }
   }
 
@@ -187,10 +187,10 @@ function parseVttWordTags(text: string): ParsedWord[] {
   const re = /<(\d{1,2}):(\d{2}):(\d{2})\.(\d{1,3})>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    const start = (((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 + Number(m[4])) * 1000;
+    const start = (((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 + Number(m[4]!.padEnd(3,'0'))) * 1000;
     marks.push({ start, index: m.index + m[0].length });
   }
-  if (marks.length < 2) return [];
+  if (!marks.length) return [];
   const words: ParsedWord[] = [];
   for (let i = 0; i < marks.length; i += 1) {
     const mark = marks[i];

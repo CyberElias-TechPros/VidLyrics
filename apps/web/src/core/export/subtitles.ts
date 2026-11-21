@@ -45,7 +45,7 @@ function timedLines(project: Project, options: SubtitleOptions): Line[] {
   return project.lyrics.lines
     .filter((l) => l.text.trim().length > 0)
     .filter((l) => !options.skipUntimed || (l.start > 0 || l.end > 0))
-    .map((l) => ({ ...l, start: Math.max(0, l.start + offset), end: Math.max(l.start, l.end + offset) }))
+    .map((l) => ({ ...l, start: Math.max(0, l.start + offset), end: Math.max(0, l.start + offset, l.end + offset) }))
     .sort((a, b) => a.start - b.start);
 }
 
@@ -69,10 +69,16 @@ export function toEnhancedLrc(project: Project, options: SubtitleOptions = {}): 
   const lines = timedLines(project, options);
   const header = [`[ti:${options.title ?? project.meta.title}]`, `[ar:${options.artist ?? project.meta.artist}]`, `[by:${APP_NAME}]`, ''];
   const body = lines.map((line) => {
-    const tags = line.words
-      .filter((w) => w.text.trim().length > 0)
-      .map((w) => `${formatLrcTimestamp(w.start).replace(/[[\]]/g, '').replace(/^/, '<').replace(/$/, '>')}${w.text}`)
-      .join('');
+    // Insert timestamps into the authored string; joining stored words loses
+    // spaces and can change punctuation and scripts without word separators.
+    let cursor = 0, tags = '';
+    for (const w of line.words) {
+      const pos = line.text.indexOf(w.text, cursor);
+      if (!w.text || pos < 0) continue;
+      tags += line.text.slice(cursor, pos) + formatLrcTimestamp(Math.max(0, w.start + (options.offsetUs ?? 0))).replace('[','<').replace(']','>') + w.text;
+      cursor = pos + w.text.length;
+    }
+    tags += line.text.slice(cursor);
     return `${formatLrcTimestamp(line.start)}${tags || line.text}`;
   });
   return [...header, ...body, ''].join('\n');
@@ -91,7 +97,7 @@ export function toVtt(project: Project, options: SubtitleOptions = {}): string {
     const cueId = `cue-${i + 1}`;
     const words = line.words
       .filter((w) => w.text.trim().length > 0)
-      .map((w) => `<${formatVttTimestamp(w.start)}>${w.text}`)
+      .map((w) => `<${formatVttTimestamp(Math.max(0,w.start + (options.offsetUs ?? 0)))}>${w.text}`)
       .join(' ');
     return `${cueId}\n${formatVttTimestamp(line.start)} --> ${formatVttTimestamp(line.end)}\n${words || line.text}\n`;
   });

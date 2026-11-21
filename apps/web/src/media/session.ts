@@ -637,7 +637,7 @@ function bytesProgress(loaded: number, total: number): string {
 }
 
 /** Generate a reviewable, line-timed transcript without uploading the audio. */
-export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto'): Promise<void> {
+export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto', options: { centre?: boolean; draft?: boolean } = {}): Promise<void> {
   const store = useEditor.getState();
   const token = reserveGenerationStart();
   if (!token) {
@@ -645,13 +645,13 @@ export async function transcribeAudio(model: 'tiny' | 'base', language = 'auto')
     return;
   }
   try {
-    await runTranscription(model, language);
+    await runTranscription(model, language, options);
   } finally {
     releaseGenerationStart(token);
   }
 }
 
-async function runTranscription(model: 'tiny' | 'base', language: string): Promise<void> {
+async function runTranscription(model: 'tiny' | 'base', language: string, options: { centre?: boolean; draft?: boolean }): Promise<void> {
   const store = useEditor.getState();
   const generationEpoch = projectEpoch;
   if (generationWorker) {
@@ -708,6 +708,8 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
     return;
   }
   const samples = audio.pcm.slice();
+  const side = options.centre && audio.channels === 2 ? new Float32Array(samples.length) : undefined;
+  if (side) for (let i = 0; i < side.length; i++) side[i] = (audio.interleaved[i*2]! - audio.interleaved[i*2+1]!) / 2;
   generationWorker = worker;
   activeGenerationId = id;
   activeGenerationKind = 'transcription';
@@ -779,6 +781,13 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
       store.setTranscription({ state: 'FAILED', progress: 0, message: 'No speech was detected.', error: 'Whisper returned no readable lyric lines.', result: null });
       return;
     }
+    if (options.draft && latest.project.lyrics.lines === store.project.lyrics.lines && !latest.project.lyrics.lines.length) {
+      latest.setLyricsFromTranscript(cues, true);
+      latest.setTranscription({ state: 'COMPLETE', progress: 1, message: 'Editable lyric video draft ready.', error: null, result: null });
+      latest.notify({ kind: 'success', title: 'Lyric video draft ready', detail: 'Review uncertain timings or change the treatment under Design.' });
+      void persist();
+      return;
+    }
     store.setTranscription({
       state: 'COMPLETE',
       progress: 1,
@@ -792,7 +801,7 @@ async function runTranscription(model: 'tiny' | 'base', language: string): Promi
     showGenerationError('transcription', id, event.message || 'The transcription worker stopped unexpectedly.');
     finishGenerationWorker(worker, id);
   };
-  worker.postMessage({ type: 'TRANSCRIBE', id, samples, sampleRate: audio.sampleRate, model, modelBundle, language }, [samples.buffer]);
+  worker.postMessage({ type: 'TRANSCRIBE', id, samples, side, sampleRate: audio.sampleRate, model, modelBundle, language }, side ? [samples.buffer,side.buffer] : [samples.buffer]);
 }
 
 export function cancelTranscription(): void {

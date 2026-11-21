@@ -25,7 +25,7 @@ const chartDatumSchema = z.object({
 
 const sceneBackgroundOverrideSchema = z
   .object({
-    kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer']).optional(),
+    kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer', 'horizon']).optional(),
     assetId: z.string().max(128).nullable().optional(),
     colors: z.array(colorOrEmpty).min(1).max(8).optional(),
     motion: z.number().min(0).max(2).optional(),
@@ -97,7 +97,7 @@ const sectionSchema = z.object({
 });
 
 const backgroundSchema = z.object({
-  kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer']),
+  kind: z.enum(['gradient', 'image', 'solid', 'mesh', 'visualizer', 'horizon']),
   assetId: z.string().max(128).nullable(),
   colors: z.array(colorOrEmpty).min(1).max(8),
   motion: z.number().min(0).max(2),
