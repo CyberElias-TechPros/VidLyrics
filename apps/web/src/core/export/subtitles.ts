@@ -59,7 +59,6 @@ export function toLrc(project: Project, options: SubtitleOptions = {}): string {
   if (artist) header.push(`[ar:${artist}]`);
   if (album) header.push(`[al:${album}]`);
   header.push(`[by:${APP_NAME}]`);
-  if ((options.offsetUs ?? 0) !== 0) header.push(`[offset:${Math.round(-(options.offsetUs ?? 0) / 1000)}]`);
 
   const body = lines.map((line) => `${formatLrcTimestamp(line.start)}${line.text}`);
   return [...header, '', ...body, ''].join('\n');

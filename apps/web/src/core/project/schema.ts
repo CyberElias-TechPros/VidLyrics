@@ -171,6 +171,8 @@ const designSchema = z.object({
   accent: colorOrEmpty.nullable()
 });
 
+export const presetStyleSchema = designSchema.pick({ typography: true, motion: true, karaoke: true, accent: true });
+
 const audioSchema = z.object({
   assetId: z.string().max(128),
   fileName: z.string().max(512),

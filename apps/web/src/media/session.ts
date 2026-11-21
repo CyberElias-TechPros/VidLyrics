@@ -1162,14 +1162,22 @@ export function cancelVoiceoverGeneration(): void {
   if (activeGenerationKind === 'voiceover') stopActiveGeneration();
 }
 
-export function downloadGeneratedVoiceover(): void {
+export async function downloadGeneratedVoiceover(): Promise<void> {
   const store = useEditor.getState();
   const meta = store.project.voiceover;
   if (!meta || voiceoverAudio?.assetId !== meta.assetId) {
     store.notify({ kind: 'warning', title: 'Voiceover audio is unavailable', detail: 'Regenerate speech in this browser to download its WAV file.' });
     return;
   }
-  downloadBlob(encodeWav(voiceoverAudio.pcm, voiceoverAudio.sampleRate, 1), meta.fileName);
+  // Export the exact stored asset. Re-quantising decoded PCM after reopen
+  // can produce different bytes and break project hash-based relinking.
+  try {
+    const original = await getAssetPayload(meta.assetId);
+    if (!original) throw new Error('Stored WAV is missing. Regenerate narration and try again.');
+    downloadBlob(original instanceof Blob ? original : new Blob([original], { type: 'audio/wav' }), meta.fileName);
+  } catch (error) {
+    store.notify({ kind: 'error', title: 'Could not download narration', detail: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 export async function removeGeneratedVoiceover(): Promise<void> {

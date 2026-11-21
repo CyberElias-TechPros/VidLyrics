@@ -59,3 +59,24 @@ it('vocal focus preserves centred tones and attenuates a wide tone without chang
   expect(centred).toHaveLength(tone.length);expect(Math.max(...centred.map((x,i)=>Math.abs(x-tone[i]!)))).toBeLessThan(.0001);
   expect(Math.max(...wide)).toBeLessThan(.08);
 });
+
+it('keeps confirmed occurrences fixed across auto-time reruns and restores estimates on undo',()=>{
+  const store=useEditor.getState();store.newProject();store.setLyricsFromText('Same again\nSame again\nSame again','user');
+  const before=useEditor.getState().project.lyrics.lines;
+  const middle=before[1]!,word=middle.words[0]!;
+  const anchor=confirmWord(middle,word.id,word.start,word.end-10000);
+  store.commit('Confirm',p=>({...p,lyrics:{...p.lyrics,lines:[before[0]!,anchor,before[2]!]}}));
+  store.generateTimings();const edited=useEditor.getState().project.lyrics.lines;
+  expect(edited[1]).toBe(anchor);expect(edited[0]!.end).toBeLessThanOrEqual(anchor.start);expect(edited[2]!.start).toBeGreaterThanOrEqual(anchor.end);
+  store.undo();expect(useEditor.getState().project.lyrics.lines[0]).toBe(before[0]);
+});
+
+import { applyPreset, readPresets, savePreset } from '../src/core/design/savedPresets';
+it('round-trips resolved user styles without sharing mutations, title, media or layout size',()=>{
+  const a=createProject(),b=createProject();a.design.motion.enter='rise';a.design.typography.weight=800;
+  const items=savePreset([],' Golden ',a.design);a.design.typography.weight=400;
+  expect(()=>savePreset(items,'GOLDEN',a.design)).toThrow();
+  const [item]=readPresets(JSON.stringify({version:1,presets:items})); const applied=applyPreset(b.design,item!);
+  expect(applied.typography.weight).toBe(800);expect(applied.motion.enter).toBe('rise');expect(applied.background).toBe(b.design.background);
+  expect(()=>readPresets('{"version":99,"presets":[]}')).toThrow();
+});

@@ -27,5 +27,18 @@ test('song → corrected repeated lyric → directed scenes → reopen → narra
   const player=await page.context().newPage();await player.goto('/');await player.setContent('<input type="file">');await player.locator('input').setInputFiles((await video.path())!);
   const stats=await player.evaluate(async()=>{const ctx=new AudioContext();const audio=await ctx.decodeAudioData(await document.querySelector('input')!.files![0]!.arrayBuffer());const samples=audio.getChannelData(0);const rms=(at:number)=>{const slice=samples.slice(at*audio.sampleRate,(at+0.1)*audio.sampleRate);return Math.sqrt(slice.reduce((sum,v)=>sum+v*v,0)/slice.length);};await ctx.close();return [audio.duration,rms(0),rms(1),rms(2.8)];});
   expect(stats[0]).toBeCloseTo(3,1);expect(stats[1]).toBeLessThan(.01);expect(stats[2]).toBeGreaterThan(.07);expect(stats[3]).toBeLessThan(.01);
-  await project.saveAs(info.outputPath('proof.vidlyricsproject'));await (await import('node:fs/promises')).writeFile(info.outputPath('melody.wav'),buffer);
+  await video.saveAs(info.outputPath('browser.mp4'));await project.saveAs(info.outputPath('proof.vidlyricsproject'));await (await import('node:fs/promises')).writeFile(info.outputPath('melody.wav'),buffer);
+});
+
+test('a saved style survives reload and applies to another project without changing its scenes', async({page})=>{
+  await page.goto('/app');
+  await page.getByRole('button',{name:'Video as code',exact:true}).click();
+  await page.getByRole('tab',{name:'design',exact:true}).click();
+  await page.getByText('My style presets',{exact:true}).click();
+  await page.getByLabel('Style name').fill('Tour titles');
+  await page.getByRole('button',{name:'Save current style'}).click();
+  await page.reload();await page.getByRole('tab',{name:'design',exact:true}).click();
+  await page.getByText('My style presets',{exact:true}).click();await page.getByLabel('Saved style').selectOption('Tour titles');
+  await page.getByRole('button',{name:'Apply to project'}).click();
+  await expect(page.getByRole('button',{name:'Undo',exact:true})).toBeEnabled();
 });

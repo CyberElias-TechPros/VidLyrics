@@ -1,4 +1,5 @@
 import { matchTranscript } from '../../core/timing/transcriptMatch';
+import { StyleLibrary } from './StyleLibrary';
 import { SceneDirector, TimingReview } from './ProductionTools';
 import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../state/store';
@@ -668,6 +669,7 @@ export function DesignPanel() {
   return (
     <>
       <SceneDirector />
+      <StyleLibrary />
       <div className="ed-panel-section">
         <span className="ed-panel-label">Theme</span>
         <div className="ed-themes">

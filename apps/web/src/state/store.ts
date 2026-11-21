@@ -15,6 +15,7 @@ import {
   canRedo, canUndo, undoLabel, redoLabel, type Command, type HistoryState
 } from '../core/project/history';
 import { usFromMs, usFromSeconds } from '../core/time';
+import { isTimingAnchor, estimateAroundAnchors } from '../core/timing/anchors';
 import { interpolateWords, estimateLineTimings } from '../core/timing/distribute';
 import { postProcess, sortLines, rebuildWordsForLine } from '../core/timing/postprocess';
 import { tapReducer, createTapSession, applyTaps, type TapSession } from '../core/timing/tap';
@@ -730,6 +731,20 @@ export const useEditor = create<EditorState>((set, get) => ({
     const before = project.lyrics.lines;
     const beforeExport = project.export;
     const durationUs = project.audio?.durationUs ?? null;
+    if (before.some(isTimingAnchor)) {
+      const end = durationUs ?? Math.max(timeScenesSequentially(before).totalDurationUs, ...before.map(l => l.end));
+      const lines = estimateAroundAnchors(before, end);
+      if (!lines.some((l,i) => l !== before[i])) return;
+      const intro = project.design.intro.enabled ? project.design.intro.durationUs : 0;
+      const outro = project.design.outro.enabled ? project.design.outro.durationUs : 0;
+      const result = applyCommand(project, history, {
+        label: 'Estimate around confirmed timings',
+        apply: p => ({ ...p, lyrics: { ...p.lyrics, lines }, export: durationUs === null ? { ...p.export, rangeEndUs: Math.max(p.export.rangeEndUs, end + intro + outro) } : p.export }),
+        revert: p => ({ ...p, lyrics: { ...p.lyrics, lines: before }, export: beforeExport })
+      });
+      set({ project: result.state, history: result.history, dirty: true });
+      return;
+    }
     if (durationUs === null) {
       const { lines: timed, totalDurationUs } = timeScenesSequentially(before);
       const introUs = project.design.intro.enabled ? project.design.intro.durationUs : 0;

@@ -25,3 +25,5 @@ jobs:
           npm run render:native -- test-results/*/proof.vidlyricsproject "$RUNNER_TEMP/native.mp4" test-results/*/melody.wav
           test "$(ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames -of csv=p=0 "$RUNNER_TEMP/native.mp4")" = 36
           test "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$RUNNER_TEMP/native.mp4")" = aac
+          ffmpeg -v error -i test-results/*/browser.mp4 -i "$RUNNER_TEMP/native.mp4" -lavfi "ssim=stats_file=$RUNNER_TEMP/compare.log" -f null -
+          awk '{split($5,a,":"); if (a[2]+0 < 0.93) exit 1} END {if (NR != 36) exit 1}' "$RUNNER_TEMP/compare.log"

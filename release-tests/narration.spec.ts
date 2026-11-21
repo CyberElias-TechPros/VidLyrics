@@ -92,3 +92,11 @@ test('real local speech can be transcribed into editable subtitle cues', async (
   await expect(song.locator('.ed-generated-lines').filter({hasText:/studio|music|video/i})).toBeVisible();
   await accept.click();await expect(song.getByRole('button',{name:'Review uncertain timings'})).toBeEnabled();
 });
+
+// Keep the visible failure stage in CI annotations even when runner log archives expire.
+test.afterEach(async ({context}, info) => {
+  if (info.status === info.expectedStatus) return;
+  const states = await Promise.all(context.pages().map(p => p.locator('.ed-generation-error, [role="status"], .ed-banner h3').allTextContents().catch(()=>[])));
+  const diagnostic = `${info.title}: ${info.error?.message ?? info.status} Visible states: ${states.flat().join('; ')}`;
+  console.error(`::error title=Speech release check::${diagnostic.replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A')}`);
+});
