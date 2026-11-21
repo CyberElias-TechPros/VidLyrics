@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('default Norman synthesis survives reopen and is audible inside the exported MP4', async ({ page }) => {
+test('default Norman and LJSpeech dialogue survives reopen and is audible inside the exported MP4', async ({ page }) => {
   const button = (name: string) => page.getByRole('button', { name, exact: true });
   const ready = page.getByRole('heading', { name: 'Voiceover ready' });
   await page.goto('/app');
@@ -10,14 +10,14 @@ test('default Norman synthesis survives reopen and is audible inside the exporte
     fps: 12,
     scenes: [
       { text: 'The turning point', narration: 'The verdict does not have to define you.' },
-      { layout: 'quote', kicker: 'YOUR NEXT STEP', text: 'Walk in grace.', narration: 'Take the next faithful step.' }
+      { speaker: 'B', layout: 'quote', kicker: 'YOUR NEXT STEP', text: 'Walk in grace.', narration: 'Take the next faithful step.' }
     ], outro: { title: 'Walk in Grace', subtitle: 'Thanks for watching.', duration: 2.5 }
   }));
   await button('Apply & narrate').click();
   // Surface model/storage errors immediately instead of waiting out a timeout.
   await expect(ready.or(page.locator('.ed-generation-error')).first()).toBeVisible({ timeout: 120_000 });
   await expect(ready).toBeVisible();
-  await expect(page.getByText(/Generated with en_US-norman-medium/)).toBeVisible();
+  await expect(page.getByText(/Generated with en_US-norman-medium \+ en_US-ljspeech-medium/)).toBeVisible();
   await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
   await page.reload();
   await button('Projects').click();

@@ -1,5 +1,15 @@
 name: Verify production speech export
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/voice-release.yml'
+      - 'apps/web/scripts/bundle-models.mjs'
+      - 'apps/web/model-voices.json'
+      - 'apps/web/src/media/**'
+      - 'release-tests/**'
+      - 'playwright.release.config.ts'
+      - 'package-lock.json'
 permissions:
   contents: read
 jobs:
